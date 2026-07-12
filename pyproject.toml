@@ -1,0 +1,67 @@
+[project]
+name = "still"
+version = "0.1.0"
+description = "still — a finite, calm, printable personal newspaper"
+readme = "README.md"
+authors = [
+    { name = "Jimmy Steinmetz", email = "jimmy@frequency.nyc" }
+]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications",
+    "Topic :: Text Processing :: Markup :: HTML",
+]
+dependencies = [
+    "feedparser>=6.0.12",
+    "google-auth-oauthlib>=1.2",
+    "google-genai>=2.8.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "pillow>=12.2.0",
+    "praw>=8.0.2",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
+    "rich>=13.0",
+    "typer>=0.26.7",
+    "weasyprint>=69.0",
+]
+
+[project.scripts]
+still = "still.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.3,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["feedparser.*", "weasyprint.*", "google_auth_oauthlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+    "types-pyyaml>=6.0.12.20260518",
+]

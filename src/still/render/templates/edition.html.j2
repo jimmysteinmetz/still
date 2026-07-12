@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>still — {{ date_display }}</title>
+<style>
+  /* ---------- Palette ----------
+     One restrained spot-colour. Set --accent to #100f0d to go fully monochrome. */
+  :root { --ink: #100f0d; --accent: #8a3b2e; --muted: #6b6862; }
+
+  @page {
+    size: letter;
+    margin: 9mm 10mm 9mm;
+    /* Foot folio so a multi-page edition reads as a set. WeasyPrint honors the
+       margin-box counters; the Chrome fallback silently omits them. */
+    @bottom-center {
+      content: counter(page) " · " counter(pages);
+      font: italic 7pt "Hoefler Text", Georgia, serif;
+      color: var(--muted);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Hoefler Text", Georgia, "Times New Roman", serif;
+    color: var(--ink);
+    margin: 0;
+    font-size: 9pt;
+    line-height: 1.34;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+  }
+
+  /* ---------- Masthead ---------- */
+  .masthead { border-top: 3pt solid var(--ink); border-bottom: 1pt solid var(--ink); padding-bottom: 1pt; }
+  .masthead-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3pt 4pt 0;
+  }
+  .ear { width: 24%; font-variant: small-caps; font-size: 7.5pt; letter-spacing: 0.4pt; line-height: 1.4; }
+  .ear-right { text-align: right; }
+  .ear .ear-head {
+    font-weight: 700;
+    letter-spacing: 1.4pt;
+    border-bottom: 0.5pt solid var(--ink);
+    padding-bottom: 1pt;
+    margin-bottom: 2pt;
+  }
+  .ear .em { font-variant: normal; font-style: italic; letter-spacing: 0; }
+  .ear .yd { font-variant: normal; letter-spacing: 0; margin-top: 2pt; padding-top: 1pt; border-top: 0.5pt solid var(--ink); }
+  .ear .yd-title { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wx-now { display: flex; align-items: center; gap: 4pt; }
+  .wx { width: 26px; height: 26px; display: inline-block; }
+  .wx-hilo { font-variant: normal; letter-spacing: 0; }
+
+  .plate { text-align: center; flex: 1; }
+  .nameplate {
+    font-family: Didot, "Bodoni 72", "Hoefler Text", Georgia, serif;
+    font-size: 60pt;
+    font-weight: 400;
+    font-style: italic;
+    text-transform: lowercase;
+    letter-spacing: 1pt;
+    line-height: 0.86;
+    margin: 0;
+  }
+  .epigraph { font-style: italic; font-size: 8pt; line-height: 1.2; margin-top: 2pt; letter-spacing: 0.2pt; }
+  .epigraph-author { font-style: normal; font-variant: small-caps; letter-spacing: 0.5pt; white-space: nowrap; }
+  .meta-rule {
+    display: flex; align-items: center; justify-content: center; gap: 8pt;
+    font-variant: small-caps; font-size: 7pt; letter-spacing: 2.5pt; color: var(--muted);
+    border-top: 0.5pt solid var(--ink); margin: 2pt 4pt 0; padding-top: 1.5pt;
+  }
+
+  /* ---------- Edition theme teaser ---------- */
+  .edition-theme {
+    text-align: center; font-style: italic; font-size: 9.5pt; color: #2b2a27;
+    padding: 3pt 8mm 0; margin: 0;
+  }
+
+  /* ---------- Lead row: feature well + rail ---------- */
+  /* Feature + rail are a flex row. The rail is kept SHORT (only Scoreboard +
+     Shows — never the lessons) so this monolithic, non-fragmenting block always
+     fits one page; an over-tall flex row would shove the whole front onto the next
+     page and blank page one. The Margin lives in its own full-width band below. */
+  .lead-row { display: flex; gap: 6mm; padding-top: 4pt; border-top: 2.5pt solid var(--ink); margin-top: 3pt; }
+  .feature { flex: 1; }
+  .kicker {
+    font-variant: small-caps; font-weight: 700; font-size: 8pt; letter-spacing: 3pt;
+    color: var(--accent); text-align: center; margin-bottom: 3pt;
+  }
+  .feature h1 {
+    font-family: Didot, "Bodoni 72", "Hoefler Text", Georgia, serif;
+    font-weight: 700; font-size: 23pt; line-height: 0.98; letter-spacing: 0.1pt;
+    text-align: center; margin: 0 0 3pt; hyphens: none; -webkit-hyphens: none;
+  }
+  .feature h1 .ref { vertical-align: super; font-size: 9pt; font-weight: 400; }
+  .standfirst {
+    font-style: italic; font-size: 11pt; line-height: 1.26; text-align: center; color: #2b2a27;
+    max-width: 92%; margin: 0 auto 4pt; padding-bottom: 3pt; border-bottom: 0.5pt solid var(--ink);
+  }
+  .feature-body { column-count: 2; column-gap: 6mm; text-align: justify; }
+  .feature-body p { margin: 0; }
+  .feature-body .byline { font-variant: small-caps; letter-spacing: 0.4pt; font-weight: 700; }
+  /* Floated drop cap. WeasyPrint renders this for short feature wells (verified via
+     smoke_render); if a very long marquee ever trips the documented multicol loop,
+     drop the `float`/`padding` to fall back to a plain raised initial. */
+  .feature-body::first-letter {
+    font-family: Didot, "Bodoni 72", Georgia, serif; font-weight: 700;
+    font-size: 320%; line-height: 0.82; float: left; padding: 2pt 3pt 0 0;
+  }
+
+  /* ---------- Rail ----------
+     Holds ONLY the short, bounded cards (Scoreboard, Shows). The Margin lives in
+     its own full-width band below — a flex row can't fragment across pages in
+     print, so an over-tall rail would shove the entire front onto the next page. */
+  .rail { width: 30%; border-left: 1pt solid var(--ink); padding-left: 6mm; }
+  .rail-card { margin: 0 0 8pt; break-inside: avoid; }
+  .rail-head {
+    text-align: center; font-variant: small-caps; font-weight: 700; font-size: 8.5pt;
+    letter-spacing: 2.5pt; border-bottom: 1.5pt solid var(--ink); padding-bottom: 2pt; margin-bottom: 3pt;
+  }
+  .score { display: flex; align-items: center; gap: 2.5pt; font-size: 8pt; line-height: 1.5; white-space: nowrap; }
+  .crest { height: 11pt; width: auto; vertical-align: middle; }
+  .score-label { font-weight: 700; font-variant: small-caps; letter-spacing: 0.3pt; }
+  .score-main { font-weight: 700; }
+  .score-sep { color: var(--muted); padding: 0 0.5pt; }
+  .score-when { font-variant: small-caps; letter-spacing: 0.3pt; }
+  .show { font-size: 8pt; line-height: 1.5; }
+  .show-artist { font-weight: 700; font-variant: small-caps; letter-spacing: 0.3pt; }
+  .show-sep { color: var(--muted); padding: 0 1.5pt; }
+  .show-when { font-variant: small-caps; letter-spacing: 0.3pt; }
+  .show-venue { color: #2b2a27; }
+  .show-venue::before { content: " — "; color: var(--muted); }
+  .margin-lesson { font-size: 8pt; line-height: 1.32; margin-bottom: 3pt; }
+  .margin-lesson:last-child { margin-bottom: 0; }
+  .margin-topic { font-weight: 700; font-variant: small-caps; letter-spacing: 0.3pt; }
+
+  /* ---------- The Margin (full-width band) ----------
+     Lessons (up to 5) flow across four columns here, NOT in the rail: that keeps
+     the flex lead-row short enough to always fit one page (see .lead-row). */
+  .margin-band { break-inside: avoid; border-top: 1.5pt solid var(--ink); padding-top: 4pt; margin-top: 7pt; }
+  .margin-head {
+    text-align: center; font-variant: small-caps; font-weight: 700; font-size: 8.5pt;
+    letter-spacing: 3pt; color: var(--accent); margin-bottom: 4pt;
+  }
+  .margin-cols { column-count: 4; column-gap: 5mm; }
+  .margin-cols .margin-lesson { break-inside: avoid; text-align: left; }
+
+  /* ---------- The Wire ---------- */
+  .wire-band {
+    text-align: center; font-variant: small-caps; font-weight: 700; font-size: 9pt;
+    letter-spacing: 4pt; border-top: 2.5pt solid var(--ink); border-bottom: 0.5pt solid var(--ink);
+    padding: 3pt 0; margin: 6pt 0 4pt;
+  }
+  /* Sections flow freely across columns; only short items avoid breaking (a section
+     taller than a column would trip the documented WeasyPrint multicol loop).
+     column-count: 4 here is only the ceiling — the template inlines
+     min(wire_count, 4) (same idiom as .margin-cols below), so a thin trailing
+     page's last couple of items collapse into fewer, wider columns instead of
+     stranding across 4 narrow ones (that narrowing was inflating wrapped-line
+     height enough to force an extra near-empty page — TASK-5). */
+  .wire { column-count: 4; column-gap: 5mm; column-rule: 0.5pt solid var(--ink); column-fill: balance; text-align: justify; }
+  .wsec {
+    font-variant: small-caps; font-weight: 700; font-size: 7pt; letter-spacing: 1.5pt;
+    color: var(--accent); margin: 0 0 2pt; padding-bottom: 1.5pt; border-bottom: 0.5pt solid var(--ink);
+    break-after: avoid;
+  }
+  .wsec:not(:first-child) { margin-top: 5pt; }
+  .witem { break-inside: avoid; margin-bottom: 6pt; }
+  .witem h3 { font-weight: 700; font-size: 9.5pt; line-height: 1.1; margin: 0 0 1.5pt; hyphens: none; -webkit-hyphens: none; }
+  .witem.lead h3 { font-size: 11pt; line-height: 1.08; }
+  .witem p { margin: 0; font-size: 8.5pt; line-height: 1.3; }
+  .byline { font-variant: small-caps; letter-spacing: 0.3pt; font-weight: 700; }
+  .ref { vertical-align: super; font-size: 6.5pt; font-weight: 400; }
+
+  /* ---------- Lexicon ---------- */
+  .lexicon { border-top: 1.5pt solid var(--ink); margin-top: 6pt; padding-top: 3pt; }
+  .lexicon h4 { text-align: center; font-variant: small-caps; font-size: 8pt; letter-spacing: 2.5pt; font-weight: 700; margin: 0 0 3pt; }
+  /* column-count: 4 is the ceiling; the template inlines min(entry_count, 4) (see
+     .margin-cols) so a short Lexicon (few glossary/French rows) doesn't spread
+     across 4 narrow columns — that narrowing was tall enough on its own to spill
+     the whole footer onto its own near-empty trailing page (TASK-5). */
+  .lex-cols { column-count: 4; column-gap: 5mm; font-size: 7.5pt; line-height: 1.3; color: #2b2a27; }
+  .lex { margin: 0 0 2.5pt; break-inside: avoid; text-align: left; }
+  .lex .term { color: var(--ink); font-weight: 700; font-variant: small-caps; letter-spacing: 0.3pt; }
+  .lex.fr .term { font-variant: normal; font-style: italic; letter-spacing: 0; }
+  .lex .fr-tag { font-variant: small-caps; font-size: 6pt; letter-spacing: 0.5pt; color: var(--muted); }
+
+  .locator { font-size: 6pt; color: var(--muted); margin: 1pt 0 0; }
+
+  .colophon {
+    text-align: center; font-style: italic; font-size: 8pt; color: #2b2a27;
+    margin-top: 4pt; padding-top: 3pt; border-top: 0.5pt solid var(--ink);
+  }
+</style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-row">
+      <div class="ear ear-left">
+        {% if weather %}
+        <div class="ear-head">Weather &middot; {{ weather.label }}</div>
+        <div class="wx-now">
+          {{ weather_icon }}
+          {% if weather_precip_icon %}{{ weather_precip_icon }}{% endif %}
+        </div>
+        <div class="wx-hilo">H {{ weather.high }}° &middot; L {{ weather.low }}° &middot; {{ weather.condition }}</div>
+        {% else %}
+        <div class="ear-head">Weather</div>
+        {% endif %}
+      </div>
+
+      <div class="plate">
+        <div class="nameplate">still</div>
+        <div class="epigraph">“{{ epigraph_quote }}”
+          <span class="epigraph-author">— {{ epigraph_author }}</span></div>
+      </div>
+
+      <div class="ear ear-right">
+        <div class="ear-head">Vol. I &middot; No. {{ edition_number }}</div>
+        <div class="em">{{ date_display }}</div>
+        <div>{{ edition_descriptor }}</div>
+        {% if your_day %}
+        <div class="yd">{% if your_day.first_time %}<span class="yd-title">{{ your_day.first_title }}</span>{{ your_day.first_time }} &middot; {{ your_day.meeting_count }} meeting{{ "s" if your_day.meeting_count != 1 else "" }}{% else %}No meetings today{% endif %}</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="meta-rule">
+      <span>{{ weather.label if weather else "New York" }}</span>
+      <span>·</span><span>A Finite Daily</span>
+      <span>·</span><span>Printed at Dawn</span>
+    </div>
+  </header>
+
+  {% if edition_headline %}
+  <p class="edition-theme">{{ edition_headline }}</p>
+  {% endif %}
+
+  <div class="lead-row">
+    {% if marquee %}
+    <div class="feature">
+      <div class="kicker">{{ feature_kicker }} · {{ marquee.section_tag }}</div>
+      <h1>{{ marquee.headline }}<span class="ref">{{ marquee.ref }}</span></h1>
+      {% if marquee.deck %}<div class="standfirst">{{ marquee.deck }}</div>{% endif %}
+      <div class="feature-body">
+        <p><span class="byline">{{ marquee.source }}.</span> {{ marquee.summary }}</p>
+        <p class="locator">Vol. I &middot; No. {{ edition_number }} &middot; Story {{ marquee.ref }}</p>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if scoreboard or shows %}
+    <aside class="rail">
+      {% if scoreboard %}
+      <div class="rail-card">
+        <div class="rail-head">Scoreboard</div>
+        {% for r in scoreboard %}
+        <div class="score">
+          {% if r.us_badge %}<img class="crest" src="{{ r.us_badge }}" alt="{{ r.label }}">
+          {% else %}<span class="score-label">{{ r.label }}</span>{% endif %}
+          {% if r.mode == 'race' %}
+          <span class="score-main">{{ r.venue }}</span>
+          <span class="score-sep">·</span>
+          <span class="score-when">{{ r.next_token }}</span>
+          {% elif r.mode == 'result' %}
+          <span class="score-main">{{ r.score }}</span>
+          {% if r.last_opp_badge %}<img class="crest" src="{{ r.last_opp_badge }}" alt="opponent">{% endif %}
+          <span class="score-sep">›</span>
+          <span class="score-when">{{ r.next_token }}</span>
+          {% if r.next_opp_badge %}<img class="crest" src="{{ r.next_opp_badge }}" alt="next opponent">{% endif %}
+          {% else %}
+          <span class="score-when">{{ r.next_token }}</span>
+          {% if r.next_opp_badge %}<img class="crest" src="{{ r.next_opp_badge }}" alt="next opponent">{% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if shows %}
+      <div class="rail-card">
+        <div class="rail-head">Upcoming Shows</div>
+        {% for s in shows %}
+        <div class="show">
+          <span class="show-artist">{{ s.artist }}</span>
+          <span class="show-sep">·</span>
+          <span class="show-when">{{ s.date_token }}</span>
+          <span class="show-venue">{{ s.venue }}{% if s.city and s.city != 'New York' %}, {{ s.city }}{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </aside>
+    {% endif %}
+  </div>
+
+  {% if lessons %}
+  <aside class="margin-band">
+    <div class="margin-head">The Margin</div>
+    <div class="margin-cols" style="column-count: {{ [lessons|length, 4]|min }}">
+      {% for l in lessons %}
+      <div class="margin-lesson"><span class="margin-topic">{{ l.title }}.</span> {{ l.body }}</div>
+      {% endfor %}
+    </div>
+  </aside>
+  {% endif %}
+
+  {% if sections %}
+  <div class="wire-band">The Wire</div>
+  <div class="wire" style="column-count: {{ [wire_count, 4]|min }}">
+    {% for section in sections %}
+    <p class="wsec">{{ section.title }}</p>
+    {% for item in section.entries %}
+    <article class="witem{% if item.pressing %} lead{% endif %}">
+      <h3>{{ item.headline }}<span class="ref">{{ item.ref }}</span></h3>
+      <p><span class="byline">{{ item.source }} —</span> {{ item.summary }}</p>
+      <p class="locator">Vol. I &middot; No. {{ edition_number }} &middot; Story {{ item.ref }}</p>
+    </article>
+    {% endfor %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <footer class="endmatter">
+    {% if glossary or french_vocab %}
+    <section class="lexicon">
+      <h4>Lexicon</h4>
+      <div class="lex-cols" style="column-count: {{ [glossary|length + french_vocab|length, 4]|min }}">
+        {% for g in glossary %}
+        <p class="lex"><span class="term">{{ g.term }}</span> — {{ g.definition }}</p>
+        {% endfor %}
+        {% for f in french_vocab %}
+        <p class="lex fr"><span class="term">{{ f.word }}</span> <span class="fr-tag">fr.</span> {{ f.gloss }}</p>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </footer>
+  <p class="colophon">You are caught up. Anything you missed will find you if it matters.</p>
+</body>
+</html>

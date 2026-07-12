@@ -1,0 +1,433 @@
+# =============================================================================
+# still — edition configuration
+#
+# This file IS the user interface. Add/remove sources, follow/unfollow teams,
+# add interests, and tune quotas by editing it directly.
+#
+# After editing, verify with:   uv run still config check
+#
+# Source `class` controls how hard the editorial filter works:
+#   trusted  — individual blogs / low-frequency newsletters; pass through
+#              near-verbatim, light summarization, long-form welcome.
+#   firehose — high-volume aggregators (HN, Reddit, arXiv); hard pre-filters
+#              (points/upvotes/recency) then an LLM pass keeps only what
+#              matches your interests.
+#
+# Remember the product tenet: the finite budget IS the product. The caps below
+# were deliberately raised once for a dense TWO-PAGE edition — still finite, no
+# "load more". Don't creep them up further to paper over selection problems.
+# (spec §2, §12)
+# =============================================================================
+
+edition:
+  timezone: America/New_York
+  weekday:
+    max_items: 24       # TODO(two-page): tuned generously for two pages; revisit after a live run
+  weekend:
+    max_items: 10       # TODO(two-page): one long-read + supporting hits over two pages; revisit
+    long_read: true
+    day: saturday        # sat vs sun still open per spec §12 — flip freely
+  dedup_lookback_days: 7  # "recently covered" window fed to the editorial prompt (TASK-3)
+
+# Free-text topics the editorial LLM matches candidates against.
+# Add or remove lines; phrasing matters more than keywords.
+interests:
+  - LLM engineering, evals, and agentic systems
+  - AI research that matters in practice (not incremental benchmarks)
+  - GCP, data engineering, and cloud infrastructure
+  - Python and developer tooling
+  - Cooking and recipes worth actually making
+  - Guitar and vintage gear
+  - Indie, indie-pop, jazz-funk and singer-songwriter music — Lake Street Dive,
+    Bleachers, Lizzy McAlpine, Phoebe Bridgers, Jacob Collier, Grace Enger,
+    Vulfpeck and affiliated acts; new releases and NYC-area shows
+  - My sports teams — Tottenham Hotspur, San Francisco 49ers, Indianapolis Colts,
+    Indiana Hoosiers, Indiana Pacers, and IndyCar
+  - New York City — interesting places to visit, neighborhood history, museums,
+    parks, and notable restaurant openings
+
+# Ordered (this is the print order). Each section has its own quota so no firehose
+# dominates. Quotas sum above the edition cap on purpose so the global max_items
+# binds and the editor picks the best across a now-broad pool. (spec §4B)
+sections:
+  - id: ai
+    title: AI & LLMs
+    max_items: 6
+  - id: eng
+    title: Engineering & Tech
+    max_items: 8
+    style: >-
+      Write for a smart non-specialist. Avoid unexplained jargon and acronyms —
+      spell out or skip terms like "bytecode VM" rather than assuming the
+      reader already knows them. For security/vulnerability stories
+      specifically, lead with the plain-English impact (what broke, who is
+      at risk) before the technical mechanism.
+  - id: cloud
+    title: Cloud / GCP
+    max_items: 3
+  - id: sports
+    title: Sports
+    max_items: 5
+  - id: music
+    title: Music & Shows
+    max_items: 5
+  - id: nyc
+    title: New York
+    max_items: 5
+  - id: personal
+    title: Personal
+    max_items: 3
+
+# Add/remove entries freely. `section` must match a sections[].id above.
+# Method-specific fields: rss → url; hn_algolia → min_points;
+# reddit → subreddit + min_upvotes; email/scrape are stubs for v1.1.
+sources:
+  # --- AI / LLMs (spec §5.2) ---
+  - name: Simon Willison
+    section: ai
+    method: rss
+    url: https://simonwillison.net/atom/everything/
+    class: trusted
+    max_items: 3
+    note: >-
+      Deprioritize routine SQLite/Datasette release-note and version-bump posts
+      (e.g. changelog-style entries with no broader argument) in favor of his
+      other AI/engineering essays, commentary, and analysis pieces — those
+      remain valuable and should be selected normally.
+
+  - name: Import AI (Jack Clark)
+    section: ai
+    method: rss
+    url: https://jack-clark.net/feed/
+    class: trusted
+    max_items: 1
+
+  - name: Latent Space
+    section: ai
+    method: rss
+    url: https://www.latent.space/feed
+    class: trusted
+    max_items: 1
+
+  - name: Hugging Face blog
+    section: ai
+    method: rss
+    url: https://huggingface.co/blog/feed.xml
+    class: firehose
+    max_items: 1
+
+  - name: r/LocalLLaMA
+    section: ai
+    method: reddit
+    subreddit: LocalLLaMA
+    class: firehose
+    min_upvotes: 200
+    max_items: 2
+
+  - name: Ahead of AI (Sebastian Raschka)
+    section: ai
+    method: rss
+    url: https://magazine.sebastianraschka.com/feed
+    class: trusted
+    max_items: 1
+
+  - name: The Gradient
+    section: ai
+    method: rss
+    url: https://thegradient.pub/rss/
+    class: trusted
+    max_items: 1
+
+  - name: Google AI blog
+    section: ai
+    method: rss
+    url: https://blog.google/technology/ai/rss/
+    class: firehose
+    max_items: 2
+
+  # --- Engineering / Tech (spec §5.3) ---
+  - name: Hacker News
+    section: eng
+    method: hn_algolia
+    class: firehose
+    min_points: 100
+    max_items: 5
+
+  - name: Lobsters
+    section: eng
+    method: rss
+    url: https://lobste.rs/rss
+    class: firehose
+    max_items: 3
+
+  - name: Julia Evans
+    section: eng
+    method: rss
+    url: https://jvns.ca/atom.xml
+    class: trusted
+    max_items: 1
+
+  - name: r/ExperiencedDevs
+    section: eng
+    method: reddit
+    subreddit: ExperiencedDevs
+    class: firehose
+    min_upvotes: 300
+    max_items: 1
+
+  # --- Cloud / GCP ---
+  - name: Google Cloud blog
+    section: cloud
+    method: rss
+    url: https://cloudblog.withgoogle.com/rss/
+    class: firehose
+    max_items: 2
+
+  - name: AWS News Blog
+    section: cloud
+    method: rss
+    url: https://aws.amazon.com/blogs/aws/feed/
+    class: firehose
+    max_items: 2
+
+  - name: Azure blog
+    section: cloud
+    method: rss
+    url: https://azure.microsoft.com/en-us/blog/feed/
+    class: firehose
+    max_items: 2
+
+  # --- Sports (team blogs — news/analysis to complement the Scoreboard scores) ---
+  - name: Cartilage Free Captain (Spurs)
+    section: sports
+    method: rss
+    url: https://cartilagefreecaptain.sbnation.com/rss/index.xml
+    class: firehose
+    max_items: 2
+
+  - name: Niners Nation (49ers)
+    section: sports
+    method: rss
+    url: https://www.ninersnation.com/rss/index.xml
+    class: firehose
+    max_items: 2
+
+  - name: Stampede Blue (Colts)
+    section: sports
+    method: rss
+    url: https://www.stampedeblue.com/rss/index.xml
+    class: firehose
+    max_items: 2
+
+  - name: The Crimson Quarry (Indiana)
+    section: sports
+    method: rss
+    url: https://www.crimsonquarry.com/rss/index.xml
+    class: firehose
+    max_items: 1
+
+  - name: Motorsport IndyCar
+    section: sports
+    method: rss
+    url: https://www.motorsport.com/rss/indycar/news/
+    class: firehose
+    max_items: 1
+
+  # --- Music & Shows (your genres + NYC show announcements + guitar gear) ---
+  - name: BrooklynVegan
+    section: music
+    method: rss
+    url: https://www.brooklynvegan.com/feed/
+    class: firehose
+    max_items: 2
+
+  - name: Stereogum
+    section: music
+    method: rss
+    url: https://www.stereogum.com/feed/
+    class: firehose
+    max_items: 2
+
+  - name: Pitchfork
+    section: music
+    method: rss
+    url: https://pitchfork.com/feed/feed-news/rss/
+    class: firehose
+    max_items: 1
+
+  - name: Guitar World
+    section: music
+    method: rss
+    url: https://www.guitarworld.com/feeds/all
+    class: firehose
+    max_items: 1
+
+  - name: r/guitar
+    section: music
+    method: reddit
+    subreddit: guitar
+    class: firehose
+    min_upvotes: 500
+    max_items: 1
+
+  # --- New York (places to visit, city culture, food, history) ---
+  - name: Time Out New York
+    section: nyc
+    method: rss
+    url: https://www.timeout.com/newyork/feed.rss
+    class: firehose
+    max_items: 2
+
+  - name: Eater NY
+    section: nyc
+    method: rss
+    url: https://ny.eater.com/rss/index.xml
+    class: firehose
+    max_items: 2
+
+  - name: Gothamist
+    section: nyc
+    method: rss
+    url: https://gothamist.com/feed
+    class: firehose
+    max_items: 1
+
+  - name: 6sqft
+    section: nyc
+    method: rss
+    url: https://www.6sqft.com/feed/
+    class: firehose
+    max_items: 1
+
+  - name: The Bowery Boys (NYC history)
+    section: nyc
+    method: rss
+    url: https://www.boweryboyshistory.com/feed
+    class: trusted
+    max_items: 1
+
+  # --- Personal (cooking; spec §5.4) ---
+  - name: Smitten Kitchen
+    section: personal
+    method: rss
+    url: https://smittenkitchen.com/feed/
+    class: trusted
+    max_items: 1
+
+  - name: King Arthur Baking
+    section: personal
+    method: rss
+    url: https://www.kingarthurbaking.com/blog/feed
+    class: trusted
+    max_items: 1
+
+# Front-page briefing modules. Each renders only when it has something to say.
+almanac:
+  your_day:
+    enabled: true
+    weekdays_only: true
+  weather:
+    enabled: true
+    label: New York
+    lat: 40.7128
+    lng: -74.0060
+  # Followed teams. Each renders in the Scoreboard only when in-season (or with a
+  # countdown ≤14 days before a season opener); off-season teams collapse away.
+  # Data + crisp logos come from ESPN's public API (no key). `espn_path` is the
+  # "<sport>/<league>" route and `espn_id` the team id — both visible in an ESPN
+  # team URL, e.g. espn.com/nfl/team/_/name/ind → football/nfl, id 11.
+  # `order` is the Scoreboard render position, shared with the series below —
+  # teams and series are merged and sorted by it, so IndyCar (order 3) can sit
+  # between Colts (2) and Indiana Football (4) instead of always trailing every
+  # team (TASK-8). Desired order: IU Basketball, Colts, IndyCar, IU Football,
+  # Pacers, Tottenham, 49ers.
+  teams:
+    - name: Indiana Hoosiers Basketball
+      short: IU BB
+      league: NCAA
+      espn_path: basketball/mens-college-basketball
+      espn_id: 84
+      order: 1
+    - name: Indianapolis Colts
+      short: COLTS
+      league: NFL
+      espn_path: football/nfl
+      espn_id: 11
+      order: 2
+    - name: Indiana Hoosiers Football
+      short: IU FB
+      league: NCAA
+      espn_path: football/college-football
+      espn_id: 84
+      order: 4
+    - name: Indiana Pacers
+      short: PACERS
+      league: NBA
+      espn_path: basketball/nba
+      espn_id: 11
+      order: 5
+    - name: Tottenham Hotspur
+      short: SPURS
+      league: EPL
+      espn_path: soccer/eng.1
+      espn_id: 367
+      order: 6
+    - name: San Francisco 49ers
+      short: 49ERS
+      league: NFL
+      espn_path: football/nfl
+      espn_id: 25
+      order: 7
+
+  # Motorsport series — next race location only (no opponent), from an ESPN racing
+  # scoreboard. `espn_path` is "racing/<league>" (IndyCar = racing/irl). `order`
+  # shares the same sequence as teams above.
+  series:
+    - name: IndyCar
+      short: INDYCAR
+      espn_path: racing/irl
+      order: 3
+  french_holidays:
+    enabled: false                # deferred to v1.1 (spec §10)
+  sports_week:
+    enabled: false                # deferred to v1.1 (spec §10)
+
+  # Rotating "Margin" lessons — short, timeless explainers that sit between the
+  # pressing stories and the rest. Code rotates the deck deterministically by
+  # edition number; the editorial LLM writes `per_edition` of them each day.
+  # Add/remove/reorder topics freely — known keys get a richer brief, any other
+  # string is used as-is. (See still/pipeline/lessons.py for the known keys.)
+  lessons:
+    enabled: true
+    per_edition: 2
+    deck:
+      - cybersecurity
+      - french_culture
+      - philosophy
+      - ny_knowledge
+      - sports_trivia
+      - vocabulary
+      - world_history
+
+  # Upcoming NYC-metro shows for your bands. Boxed card under the Scoreboard.
+  # Data: SeatGeek API — needs a free client_id in the SEATGEEK_CLIENT_ID env var
+  # (https://seatgeek.com/account/develop). Without it the card just hides.
+  # Default geo is NYC (40.7128, -74.006) within range_mi.
+  shows:
+    enabled: true
+    range_mi: 40
+    artists:
+      - Lake Street Dive
+      - Bleachers
+      - Lizzy McAlpine
+      - Phoebe Bridgers
+      - Jacob Collier
+      - Grace Enger
+      - Vulfpeck
+      - Theo Katzman
+      - Cory Wong
+
+delivery:
+  # Email delivery is Phase 2 — set this to your inbox when it lands.
+  email: you@example.com
+  archive: data/editions/
