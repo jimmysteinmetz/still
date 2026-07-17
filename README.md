@@ -69,6 +69,8 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
+Pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
 ## Tickets
 
 Work is tracked locally with [Backlog.md](https://github.com/MrLesk/Backlog.md)
@@ -110,4 +112,16 @@ words — above a one-line condensed Sources footer.
 
 ## License
 
-[MIT](LICENSE)
+[FSL-1.1-MIT](LICENSE) — the [Functional Source License](https://fsl.software/).
+
+still is **source-available** ([fair source](https://fair.io/)), not open
+source. You can read, run, modify, and self-host it freely — personal use,
+internal use, education, and research are all fine. The one thing you can't do
+is offer still (or a substantially similar product) as a commercial product or
+service. Each release automatically converts to plain MIT two years after it
+ships.
+
+Want to use still commercially? Get in touch: <jimmy@frequency.nyc>
+
+(The initial release commit was published under MIT and remains MIT; everything
+from this change forward is FSL-1.1-MIT.)
