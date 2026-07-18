@@ -38,9 +38,13 @@ interests:
   - Python and developer tooling
   - Cooking and recipes worth actually making
   - Guitar and vintage gear
-  - Indie, indie-pop, jazz-funk and singer-songwriter music — Lake Street Dive,
-    Bleachers, Lizzy McAlpine, Phoebe Bridgers, Jacob Collier, Grace Enger,
-    Vulfpeck and affiliated acts; new releases and NYC-area shows
+  - Indie, indie-pop, jazz-funk and singer-songwriter music — Bon Iver,
+    Lizzy McAlpine, Sigur Rós, Jack White, Ben Folds Five, Grace Enger,
+    Vulfmon, Bleachers, Lawrence, Margaret Glaspy, John Mayer, Jacob Collier,
+    Death Cab for Cutie, Maisie Peters, Couch, Vampire Weekend, slimdan,
+    Arctic Monkeys, Jimi Hendrix, Olivia Rodrigo, Phoebe Bridgers, Carole King,
+    The Format, Lake Street Dive, Vulfpeck, Theo Katzman, Cory Wong and
+    affiliated acts; new releases and NYC-area shows
   - My sports teams — Tottenham Hotspur, San Francisco 49ers, Indianapolis Colts,
     Indiana Hoosiers, Indiana Pacers, and IndyCar
   - New York City — interesting places to visit, neighborhood history, museums,
@@ -417,12 +421,32 @@ almanac:
     enabled: true
     range_mi: 40
     artists:
-      - Lake Street Dive
-      - Bleachers
+      # Top 25 from scripts/spotify_pull.py (2026-07-18, long-term weighted),
+      # plus two hand-picked keepers at the end.
+      - Bon Iver
       - Lizzy McAlpine
-      - Phoebe Bridgers
-      - Jacob Collier
+      - Sigur Rós
+      - Jack White
+      - Ben Folds Five
       - Grace Enger
+      - Vulfmon
+      - Bleachers
+      - Lawrence
+      - Margaret Glaspy
+      - John Mayer
+      - Jacob Collier
+      - Death Cab for Cutie
+      - Maisie Peters
+      - Couch
+      - Vampire Weekend
+      - slimdan
+      - Arctic Monkeys
+      - Jimi Hendrix
+      - Olivia Rodrigo
+      - Phoebe Bridgers
+      - Carole King
+      - The Format
+      - Lake Street Dive
       - Vulfpeck
       - Theo Katzman
       - Cory Wong

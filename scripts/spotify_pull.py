@@ -35,10 +35,14 @@ redirect on http://127.0.0.1:8888/callback, and the script exits after
 printing its report — nothing is stored on disk, no daemon is left running.
 
 OUTPUT: your top artists across Spotify's three time ranges (last ~4 weeks /
-~6 months / several years), deduped and ranked by how consistently they show
-up, then the same for genres, then a ready-to-paste YAML block for
-``almanac.shows.artists`` and a suggested ``interests`` line — paste both into
-``config/still.yaml`` by hand (this script never writes files).
+~6 months / long_term, Spotify's longest window — roughly a year-plus weighted
+toward your whole history), deduped and ranked with long_term weighted
+heaviest so multi-year favorites outrank last month's binge. Then genres, then
+a ready-to-paste YAML block for ``almanac.shows.artists`` and a suggested
+``interests`` line — paste both into ``config/still.yaml`` by hand (this
+script never writes files). NOTE: a true "last N years" window is not
+available from the Web API; that would need Spotify's extended
+streaming-history export (privacy page, takes weeks) or Last.fm scrobbles.
 """
 
 import base64
@@ -48,6 +52,7 @@ import secrets
 import sys
 import webbrowser
 from collections import Counter
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -62,11 +67,26 @@ TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE = "https://api.spotify.com/v1"
 TIME_RANGES = ("short_term", "medium_term", "long_term")
 TOP_ARTISTS_LIMIT = 50  # Spotify's max page size for /me/top/artists
-SUGGESTED_ARTIST_COUNT = 9  # matches the current almanac.shows.artists list size
+TOP_ARTISTS_PAGES = 2  # pages per time range; Spotify caps the list around 100
+SUGGESTED_ARTIST_COUNT = 25  # Shows card renders max_rows anyway; a wide net is fine
 SUGGESTED_GENRE_COUNT = 12
 
-# (name, genres, appearances across the 3 time ranges, best 0-based rank position)
-RankedArtist = tuple[str, list[str], int, int]
+# long_term is the closest the API gets to "the last few years" — weight it so a
+# multi-year staple outranks a recent binge, while a current obsession still places.
+RANGE_WEIGHTS = {"short_term": 1.0, "medium_term": 2.0, "long_term": 4.0}
+RANGE_TAGS = {"short_term": "4wk", "medium_term": "6mo", "long_term": "yrs"}
+_POOL = TOP_ARTISTS_LIMIT * TOP_ARTISTS_PAGES  # deepest position an artist can hold
+
+
+@dataclass
+class RankedArtist:
+    name: str
+    genres: list[str]
+    positions: dict[str, int] = field(default_factory=dict)  # time_range -> 0-based rank
+
+    @property
+    def score(self) -> float:
+        return sum(RANGE_WEIGHTS[r] * (_POOL - pos) for r, pos in self.positions.items())
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -155,60 +175,75 @@ def _exchange_code(client_id: str, client_secret: str | None, code: str, verifie
 
 
 def _fetch_top_artists(token: str, time_range: str) -> list[dict[str, object]]:
-    """One page (up to 50) of top artists for a single Spotify time range."""
-    resp = httpx.get(
-        f"{API_BASE}/me/top/artists",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"time_range": time_range, "limit": TOP_ARTISTS_LIMIT},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    items: list[dict[str, object]] = resp.json().get("items", [])
+    """Up to TOP_ARTISTS_PAGES pages of top artists for a single Spotify time range."""
+    items: list[dict[str, object]] = []
+    for page in range(TOP_ARTISTS_PAGES):
+        resp = httpx.get(
+            f"{API_BASE}/me/top/artists",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "time_range": time_range,
+                "limit": TOP_ARTISTS_LIMIT,
+                "offset": page * TOP_ARTISTS_LIMIT,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        page_items: list[dict[str, object]] = resp.json().get("items", [])
+        items.extend(page_items)
+        if len(page_items) < TOP_ARTISTS_LIMIT:
+            break  # last page — no point requesting further offsets
     return items
 
 
 def _rank_artists(by_range: dict[str, list[dict[str, object]]]) -> list[RankedArtist]:
-    """Dedupe artists seen across time ranges, best (most consistent) first.
+    """Dedupe artists seen across time ranges, ranked by history-weighted score.
 
-    Ranked by (# time ranges the artist appears in, descending), then by the
-    best 0-based position they held in any single range (ascending) — an
-    artist near the top of even one range outranks one buried in all three.
+    Each appearance contributes ``RANGE_WEIGHTS[range] * (pool_size - position)``
+    — long_term counts 4x short_term, so an artist high in your multi-year
+    history outranks one you only binged last month, but appearing in several
+    ranges still compounds.
     """
     best: dict[str, RankedArtist] = {}
-    for artists in by_range.values():
+    for time_range, artists in by_range.items():
         for position, artist in enumerate(artists):
             artist_id = str(artist["id"])
             name = str(artist["name"])
             raw_genres = artist.get("genres", [])
             genres = [str(g) for g in raw_genres] if isinstance(raw_genres, list) else []
-            if artist_id in best:
-                _, _, appearances, best_rank = best[artist_id]
-                best[artist_id] = (name, genres, appearances + 1, min(best_rank, position))
-            else:
-                best[artist_id] = (name, genres, 1, position)
-    return sorted(best.values(), key=lambda v: (-v[2], v[3]))
+            entry = best.setdefault(artist_id, RankedArtist(name, genres))
+            entry.positions[time_range] = min(entry.positions.get(time_range, position), position)
+    return sorted(best.values(), key=lambda a: -a.score)
 
 
 def _top_genres(ranked: list[RankedArtist], n: int) -> list[tuple[str, int]]:
-    counts = Counter(genre for _name, genres, _appearances, _rank in ranked for genre in genres)
+    counts = Counter(genre for artist in ranked for genre in artist.genres)
     return counts.most_common(n)
 
 
 def _print_report(ranked: list[RankedArtist], genres: list[tuple[str, int]]) -> None:
     print("\n" + "=" * 78)
-    print("SPOTIFY TOP ARTISTS  (deduped + ranked across short/medium/long_term)")
+    print(f"SPOTIFY TOP ARTISTS — all {len(ranked)}, long-term history weighted heaviest")
     print("=" * 78)
-    for i, (name, artist_genres, appearances, rank) in enumerate(ranked[:25], start=1):
-        genre_str = ", ".join(artist_genres[:3]) if artist_genres else "(no genre tags)"
-        print(f"{i:>2}. {name}  [{genre_str}]  (in {appearances}/3 ranges, best #{rank + 1})")
+    for i, artist in enumerate(ranked, start=1):
+        genre_str = f"  [{', '.join(artist.genres[:3])}]" if artist.genres else ""
+        ranges = " · ".join(
+            f"{RANGE_TAGS[r]} #{artist.positions[r] + 1}"
+            for r in TIME_RANGES[::-1]  # long_term first — it drives the ranking
+            if r in artist.positions
+        )
+        print(f"{i:>3}. {artist.name}{genre_str}  ({ranges})")
 
     print("\n" + "=" * 78)
     print("TOP GENRES")
     print("=" * 78)
-    for genre, count in genres:
-        print(f"  {genre}  (x{count})")
+    if genres:
+        for genre, count in genres:
+            print(f"  {genre}  (x{count})")
+    else:
+        print("  (Spotify returned no genre tags — newer API apps often get empty genres.)")
 
-    top_names = [name for name, _genres, _appearances, _rank in ranked[:SUGGESTED_ARTIST_COUNT]]
+    top_names = [artist.name for artist in ranked[:SUGGESTED_ARTIST_COUNT]]
     print("\n" + "=" * 78)
     print("READY TO PASTE 1/2 — replace almanac.shows.artists in config/still.yaml:")
     print("=" * 78)
@@ -217,19 +252,18 @@ def _print_report(ranked: list[RankedArtist], genres: list[tuple[str, int]]) -> 
         print(f"      - {name}")
 
     genre_words = ", ".join(g for g, _count in genres[:6])
-    artist_words = ", ".join(top_names[:6])
+    artist_words = ", ".join(top_names[:8])
+    prefix = f"{genre_words} — " if genre_words else ""
     print("\n" + "=" * 78)
     print("READY TO PASTE 2/2 — suggested replacement for the music line under interests:")
     print("=" * 78)
-    print(
-        f"  - {genre_words} — {artist_words} and affiliated acts; new releases and NYC-area shows"
-    )
+    print(f"  - {prefix}{artist_words} and affiliated acts; new releases and NYC-area shows")
     print(
         "\nEdit config/still.yaml by hand with the blocks above — this script never "
-        "writes files. Trim to artists/genres you'd actually recognize; fewer, "
-        "better-known names beat a long list (the Shows card is already capped at "
-        "max_rows, so curating *which* artists are configured is the real lever, "
-        "not raising that cap).\n"
+        "writes files. A long artists list is fine: the Shows card still renders at "
+        "most max_rows (the soonest shows win), so extra names just widen the net. "
+        "Each configured artist costs one SeatGeek call per build — dozens is fine, "
+        "hundreds is silly.\n"
     )
 
 
