@@ -358,6 +358,12 @@ consecutive real `still build` days (or manually seeded history).
 (`almanac/calendar.py`) built — Google Calendar API via OAuth, first-meeting + count in the
 masthead right ear (see the Your Day quirk). Its `still calendar auth` consent + a published
 (non-"Testing") OAuth screen is the one live setup step remaining before the unattended job.
+**Artist lists refreshed from real listening data (2026-07-18):** the one-off
+`scripts/spotify_pull.py` (Spotify top artists, long_term-weighted 4x so multi-year
+favorites outrank recent binges) fed both `almanac.shows.artists` (top 25 + 2 hand-picked
+keepers) and the music `interests` line (all 27 — the editorial LLM only sees `interests`,
+so shows-card artists must be mirrored there by hand). Re-run it every few months;
+Spotify's API returns no genre tags for newer apps, so genre wording stays hand-written.
 
 **Immediate next steps (in order):**
 1. **Email delivery** then **Cloud Run job + Cloud Scheduler** (region us-east4),
