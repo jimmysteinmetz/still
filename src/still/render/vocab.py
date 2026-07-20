@@ -27,14 +27,24 @@ FRENCH_VOCAB: list[tuple[str, str]] = [
 ]
 
 
-def french_fallback(edition_number: int, count: int) -> list[tuple[str, str]]:
+def french_fallback(
+    edition_number: int, count: int, avoid: set[str] | None = None
+) -> list[tuple[str, str]]:
     """``count`` (word, gloss) pairs starting at this edition's rotating offset.
 
     Deterministic and daily-rotating like the masthead epigraph, so successive
-    fallbacks don't repeat until the deck is exhausted.
+    fallbacks don't repeat until the deck is exhausted. ``avoid`` skips words
+    already used recently (cross-day dedup); if it covers most/all of the deck,
+    tops up with whatever's left rather than returning fewer than requested —
+    a rare repeat beats an empty Lexicon slot.
     """
     if count <= 0 or not FRENCH_VOCAB:
         return []
+    avoid = avoid or set()
     n = min(count, len(FRENCH_VOCAB))
     start = ((edition_number - 1) * count) % len(FRENCH_VOCAB)
-    return [FRENCH_VOCAB[(start + i) % len(FRENCH_VOCAB)] for i in range(n)]
+    ordered = [FRENCH_VOCAB[(start + i) % len(FRENCH_VOCAB)] for i in range(len(FRENCH_VOCAB))]
+    picked = [pair for pair in ordered if pair[0] not in avoid][:n]
+    if len(picked) < n:
+        picked += [pair for pair in ordered if pair not in picked][: n - len(picked)]
+    return picked

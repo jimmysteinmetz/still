@@ -31,6 +31,21 @@ CREATE TABLE IF NOT EXISTS editions (
     pdf_path       TEXT,
     archived_at    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS lessons (
+    id         INTEGER PRIMARY KEY,
+    edition_id TEXT NOT NULL REFERENCES editions(id),
+    topic      TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS french_vocab (
+    id         INTEGER PRIMARY KEY,
+    edition_id TEXT NOT NULL REFERENCES editions(id),
+    word       TEXT NOT NULL,
+    gloss      TEXT NOT NULL
+);
 """
 
 
@@ -91,6 +106,54 @@ def recent_selected_titles(
             (since_date,),
         )
     ]
+
+
+def recent_lessons(conn: sqlite3.Connection, since_date: str) -> list[tuple[str, str, str]]:
+    """(topic, title, body) of Margin lessons published on or after `since_date`
+    (YYYY-MM-DD, inclusive) — content-level dedup for the Margin band."""
+    return [
+        (row[0], row[1], row[2])
+        for row in conn.execute(
+            "SELECT lessons.topic, lessons.title, lessons.body FROM lessons"
+            " JOIN editions ON lessons.edition_id = editions.id"
+            " WHERE editions.date >= ?"
+            " ORDER BY editions.date DESC",
+            (since_date,),
+        )
+    ]
+
+
+def recent_french_words(conn: sqlite3.Connection, since_date: str) -> list[str]:
+    """French words used in the Lexicon on or after `since_date` (inclusive)."""
+    return [
+        row[0]
+        for row in conn.execute(
+            "SELECT french_vocab.word FROM french_vocab"
+            " JOIN editions ON french_vocab.edition_id = editions.id"
+            " WHERE editions.date >= ?"
+            " ORDER BY editions.date DESC",
+            (since_date,),
+        )
+    ]
+
+
+def save_lessons_and_vocab(
+    conn: sqlite3.Connection,
+    edition_id: str,
+    lessons: list[tuple[str, str, str]],
+    french_words: list[tuple[str, str]],
+) -> None:
+    """Record this edition's Margin lessons and Lexicon vocab for future dedup.
+    Must run after save_edition — both tables FK-reference editions(id)."""
+    conn.executemany(
+        "INSERT INTO lessons (edition_id, topic, title, body) VALUES (?, ?, ?, ?)",
+        [(edition_id, topic, title, body) for topic, title, body in lessons],
+    )
+    conn.executemany(
+        "INSERT INTO french_vocab (edition_id, word, gloss) VALUES (?, ?, ?)",
+        [(edition_id, word, gloss) for word, gloss in french_words],
+    )
+    conn.commit()
 
 
 def mark_seen(conn: sqlite3.Connection, items: list[Item]) -> None:

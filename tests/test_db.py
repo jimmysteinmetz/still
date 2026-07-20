@@ -1,7 +1,10 @@
 """SQLite persistence — seen-history, cross-day dedup, and edition archive."""
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from still import db
 from still.models import Edition, Item
@@ -67,3 +70,61 @@ def test_mark_seen_inserts_only_given_items(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "test.db")
     db.mark_seen(conn, [make_item(1)])
     assert db.seen_urls(conn) == {"https://example.com/1"}
+
+
+def test_recent_lessons_empty_when_no_editions(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    assert db.recent_lessons(conn, "2026-01-01") == []
+
+
+def test_recent_lessons_returns_saved_lessons_since_date(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    db.save_edition(conn, make_edition("ed-1", "2026-06-10", []), [])
+    db.save_lessons_and_vocab(
+        conn, "ed-1", [("philosophy", "Philosophy", "The trolley problem.")], []
+    )
+
+    result = db.recent_lessons(conn, "2026-01-01")
+
+    assert result == [("philosophy", "Philosophy", "The trolley problem.")]
+
+
+def test_recent_lessons_respects_since_date(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    db.save_edition(conn, make_edition("ed-1", "2026-06-01", []), [])
+    db.save_edition(conn, make_edition("ed-2", "2026-07-08", []), [])
+    db.save_lessons_and_vocab(conn, "ed-1", [("philosophy", "Philosophy", "Old lesson.")], [])
+    db.save_lessons_and_vocab(conn, "ed-2", [("philosophy", "Philosophy", "New lesson.")], [])
+
+    result = db.recent_lessons(conn, "2026-07-01")
+
+    assert result == [("philosophy", "Philosophy", "New lesson.")]
+
+
+def test_recent_french_words_empty_when_no_editions(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    assert db.recent_french_words(conn, "2026-01-01") == []
+
+
+def test_recent_french_words_returns_saved_words_since_date(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    db.save_edition(conn, make_edition("ed-1", "2026-06-10", []), [])
+    db.save_lessons_and_vocab(conn, "ed-1", [], [("flâner", "to wander")])
+
+    result = db.recent_french_words(conn, "2026-01-01")
+
+    assert result == ["flâner"]
+
+
+def test_save_lessons_and_vocab_requires_existing_edition(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.save_lessons_and_vocab(conn, "ed-missing", [("philosophy", "Philosophy", "x")], [])
+
+
+def test_save_lessons_and_vocab_handles_empty_lists(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "test.db")
+    db.save_edition(conn, make_edition("ed-1", "2026-06-10", []), [])
+    db.save_lessons_and_vocab(conn, "ed-1", [], [])
+    assert db.recent_lessons(conn, "2026-01-01") == []
+    assert db.recent_french_words(conn, "2026-01-01") == []
