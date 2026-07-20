@@ -141,38 +141,74 @@ def test_margin_card_appears_only_with_lessons() -> None:
     assert "Think clearly." in with_lessons
 
 
-def test_wire_column_count_adapts_to_item_count() -> None:
-    """TASK-5 (b): .wire's column-count should collapse to the actual number of
-    Wire entries (marquee excluded) rather than always spreading across a fixed
-    4 — a thin trailing page with only 1-2 leftover items used to strand them
-    across 4 narrow columns instead of 1-2 wide ones."""
-    cfg = load_config()
-    items = {f"item{n}": _item(section="eng") for n in range(1, 3)}
-    # One marquee (not in the Wire) + 2 Wire items.
-    selections = [
-        Selection(item_id="item1", section="ai", headline="Marquee", summary="s"),
-        Selection(item_id="item2", section="eng", headline="Wire one", summary="s"),
-    ]
-    items["item1"] = _item(section="ai")
-    html = render_html(
-        selections_result(selections), items, cfg, date_display="d", edition_number=1
-    )
-    assert 'class="wire" style="column-count: 1"' in html  # only 1 real Wire entry
-
-
-def test_wire_column_count_caps_at_four() -> None:
-    cfg = load_config()
+def _n_selections(n: int) -> tuple[list[Selection], dict[str, Item]]:
+    """1 marquee + (n-1) wire stories, with matching items."""
     items = {"item0": _item(section="ai")}
     selections = [Selection(item_id="item0", section="ai", headline="Marquee", summary="s")]
-    for n in range(1, 7):  # 6 Wire items, well past the 4-column ceiling
-        items[f"item{n}"] = _item(section="eng")
+    for i in range(1, n):
+        items[f"item{i}"] = _item(section="eng")
         selections.append(
-            Selection(item_id=f"item{n}", section="eng", headline=f"H{n}", summary="s")
+            Selection(item_id=f"item{i}", section="eng", headline=f"H{i}", summary="s")
         )
+    return selections, items
+
+
+def test_edition_is_two_fixed_sheets() -> None:
+    """The fixed two-page layout: exactly one p1 and one p2 sheet, always —
+    even a thin edition keeps its two-page shape (stable duplex artifact)."""
+    cfg = load_config()
+    selections, items = _n_selections(2)
     html = render_html(
         selections_result(selections), items, cfg, date_display="d", edition_number=1
     )
-    assert 'class="wire" style="column-count: 4"' in html  # capped, never wider than 4
+    assert html.count('class="sheet p1"') == 1
+    assert html.count('class="sheet p2"') == 1
+
+
+def test_wire_splits_front_row_from_page_two() -> None:
+    """1 marquee + 6 wire stories: exactly 4 land in the page-1 front row
+    (with per-item section tags), the remaining 2 in the grouped page-2 wire."""
+    cfg = load_config()
+    selections, items = _n_selections(7)
+    html = render_html(
+        selections_result(selections), items, cfg, date_display="d", edition_number=1
+    )
+    assert 'class="wire wire-p1" style="column-count: 4"' in html
+    p1_block = html.split('class="sheet p2"')[0]
+    assert p1_block.count('class="wtag"') == 4  # one section tag per front slot
+    assert 'class="wire wire-p2" style="column-count: 2"' in html  # TASK-5 clamp idiom
+    assert html.count('class="wsec"') == 1  # p2 groups under one section header
+
+
+def test_front_row_collapses_columns_on_a_thin_day() -> None:
+    """TASK-5 idiom survives: 1 marquee + 1 wire story -> a 1-column front row
+    and NO page-2 wire block (but the p2 sheet still renders for Margin/Lexicon)."""
+    cfg = load_config()
+    selections, items = _n_selections(2)
+    html = render_html(
+        selections_result(selections), items, cfg, date_display="d", edition_number=1
+    )
+    assert 'class="wire wire-p1" style="column-count: 1"' in html
+    assert 'class="wire wire-p2"' not in html  # no page-2 wire markup (CSS rules remain)
+    assert html.count('class="sheet p2"') == 1
+
+
+def test_weekend_kind_sets_body_class() -> None:
+    cfg = load_config()
+    selections, items = _n_selections(2)
+    weekday = render_html(
+        selections_result(selections), items, cfg, date_display="d", edition_number=1
+    )
+    weekend = render_html(
+        selections_result(selections),
+        items,
+        cfg,
+        date_display="d",
+        edition_number=1,
+        kind="weekend",
+    )
+    assert '<body class="weekend">' in weekend
+    assert '<body class="weekend">' not in weekday
 
 
 def test_lex_cols_column_count_adapts_to_entry_count() -> None:

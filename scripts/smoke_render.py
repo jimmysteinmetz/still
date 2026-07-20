@@ -19,11 +19,13 @@ from still.almanac.weather import Weather
 from still.config import load_config
 from still.models import Item
 from still.pipeline.editorial import (
+    EditionKind,
     EditorialResult,
     FrenchEntry,
     GlossaryEntry,
     Lesson,
     Selection,
+    clamp_to_layout,
 )
 from still.render import badges
 from still.render.html import render_html
@@ -35,6 +37,7 @@ CONTENT = [
         "ai",
         "Simon Willison",
         "Anthropic Reverses Course on Claude's AI Research Safeguards",
+        # Weekday marquee: written to the 150-190 word prompt target (cap 200).
         "Anthropic has apologized and walked back a controversial policy that could have "
         "invisibly sabotaged AI researchers using their Claude models. The change makes "
         "safeguards for frontier development legible again, and restores trust with a wary "
@@ -42,8 +45,13 @@ CONTENT = [
         "original policy would have let the company silently degrade outputs for flagged "
         "research workloads, a capability critics called a backdoor on independent evaluation. "
         "Anthropic now says any such intervention will be logged and disclosed, and that "
-        "external auditors will get a documented appeals path. The episode lands as labs weigh "
-        "how much of their evaluation stack they are willing to rent from a single vendor.",
+        "external auditors will get a documented appeals path with a stated seven-day "
+        "response deadline. The reversal followed a joint letter from eleven university labs "
+        "and two independent evaluation shops, several of which had already begun porting "
+        "their harnesses to open-weight models. For this reader the episode is a working "
+        "reminder that every hosted model is also a policy surface: the same API that grades "
+        "your evals can quietly change under them. The practical hedge stays the same — keep "
+        "an open-weight baseline warm, and treat provider policy as mutable, not load-bearing.",
     ),
     (
         "ai",
@@ -76,8 +84,13 @@ CONTENT = [
         "eng",
         "Lobsters",
         "Discord Migrates Voice Infrastructure to the Edge",
-        "Discord details moving real-time voice to edge points of presence to cut latency and "
-        "improve reliability, with a candid post-mortem of the migration's rough edges.",
+        # Front-row story: written to the 70-90 word prompt target (cap 95).
+        "Discord details moving real-time voice from centralized regions to edge points of "
+        "presence, cutting median join latency from 210ms to 80ms and packet loss roughly in "
+        "half on the worst routes. The post is candid about the migration's rough edges: a "
+        "week of degraded audio in South America from a mislabeled peering link, and a "
+        "rollback tool that itself needed a rollback. The lasting lesson is organizational — "
+        "the team now treats every regional failover as a rehearsed, scored drill.",
     ),
     (
         "eng",
@@ -101,8 +114,14 @@ CONTENT = [
         "cloud",
         "Google Cloud blog",
         "Lightning Engine Boosts Apache Spark by 4.9x",
+        # Front-row story: written to the 70-90 word prompt target (cap 95).
         "Google Cloud's Lightning Engine accelerates Spark workloads up to 4.9 times by fusing "
-        "operators and optimizing shuffle, with benchmarks across common ETL jobs.",
+        "operators and optimizing shuffle, with benchmarks across common ETL jobs showing a "
+        "median 2.6x speedup and the headline 4.9x on join-heavy pipelines. Pricing is "
+        "unchanged — the engine is a drop-in runtime flag on Dataproc Serverless — so the win "
+        "lands directly as lower slot-hours. Early adopters report cutting a nightly "
+        "four-hour warehouse build to just over ninety minutes without touching a line of "
+        "pipeline code.",
     ),
     (
         "cloud",
@@ -124,10 +143,13 @@ CONTENT = [
         "ai",
         "Import AI (Jack Clark)",
         "Open-Weight Models Keep Closing the Gap on Frontier Labs",
+        # Front-row story: written to the 70-90 word prompt target (cap 95).
         "A new round of open-weight releases lands within two to three points of closed "
         "frontier models on reasoning and coding benchmarks, closing a gap that stood at over "
-        "ten points a year ago. The piece argues the practical moat is shifting from raw "
-        "capability to deployment, safety tooling, and inference cost.",
+        "ten points a year ago. Inference cost tells the sharper story: the open models run at "
+        "roughly a fifth of frontier API pricing on commodity GPUs. The piece argues the "
+        "practical moat is shifting from raw capability to deployment, safety tooling, and "
+        "distribution — exactly the layers the closed labs are now racing to productize.",
     ),
     (
         "ai",
@@ -172,10 +194,14 @@ CONTENT = [
         "personal",
         "r/guitar",
         "The Case for Learning on a Cheap Guitar First",
-        "A well-argued thread: a $150 setup-adjusted instrument removes the fear of mistakes that "
-        "stalls beginners, and the money is better spent on lessons than on tone. Several "
-        "commenters who started on sub-$200 guitars and only upgraded after a year say the "
-        "cheap instrument never actually held their progress back.",
+        # Front-row story: written to the 70-90 word prompt target (cap 95).
+        "A well-argued thread: a $150 setup-adjusted instrument removes the fear of mistakes "
+        "that stalls beginners, and the money is better spent on lessons than on tone. "
+        "Several commenters who started on sub-$200 guitars and only upgraded after a year "
+        "say the cheap instrument never held their progress back — and one teacher estimates "
+        "nine of ten students who buy expensive first guitars quit before the fear of "
+        "scratching them wears off. The thread's one caveat: pay a tech the $50 for a real "
+        "setup.",
     ),
     (
         "personal",
@@ -193,9 +219,10 @@ CONTENT = [
     ),
 ]
 
-# Front stories lifted out of their sections, ahead of The Margin. The first
-# pressing item (lowest index) keeps the drop-capped lead treatment.
-PRESSING_IDX = {0, 4, 7}
+# Exactly 5 pressing, matching the fixed-layout prompt: the first (lowest index)
+# is the drop-capped marquee; the other four fill the page-1 Wire front row
+# (split_wire pulls pressing stories into the front slots first).
+PRESSING_IDX = {0, 4, 7, 10, 16}
 
 cfg = load_config()
 items = {
@@ -212,6 +239,9 @@ items = {
 }
 result = EditorialResult(
     edition_headline="AI Policy Shifts, Agent Tools Evolve, and Cloud Speeds Up",
+    # Skip i2 (the shortest brief) to land exactly on the weekday capacity of 18
+    # — smoke bypasses enforce_budget's count clamp, so the fixture must respect
+    # the budget itself, and dropping the SHORTEST keeps this a worst-case fit.
     selections=[
         Selection(
             item_id=f"i{n}",
@@ -227,6 +257,7 @@ result = EditorialResult(
             ),
         )
         for n, (section, _src, head, summary) in enumerate(CONTENT)
+        if n != 2
     ],
     glossary=[
         GlossaryEntry(
@@ -377,16 +408,22 @@ WEEKEND_MARQUEE = (
     "For a working engineer the takeaway is concrete: keep an open-weight escape hatch warm, and "
     "treat any single provider's policy as mutable rather than load-bearing."
 )
-# Weekend quick hits target a tighter word count (25-40) than weekday briefs
-# (40-55) per the editorial prompt, so a few CONTENT entries lengthened for the
-# weekday fixture need a shorter override here to keep this a realistic proxy.
+# The first four weekend hits lead the front row at 70-90 words; the remaining
+# hits are 25-40 word quick hits, so weekday-length CONTENT entries need shorter
+# overrides here to stay a realistic proxy. (Anything still over-cap is
+# machine-truncated by clamp_to_layout below, exactly as production would.)
 WEEKEND_HIT_OVERRIDES = {
     1: "A wide-ranging essay contrasts 'model labs' chasing foundational scale with 'agent "
-    "labs' building autonomous systems atop them — arguing the durable moats are shifting "
-    "from raw parameter count toward orchestration and distribution.",
+    "labs' building autonomous systems atop them — arguing the split explains why two "
+    "well-funded companies can pursue opposite strategies and both stay profitable. The "
+    "durable moats, it argues, are shifting from raw parameter count toward orchestration, "
+    "evals, and distribution. The essay closes on 'untrainable AI': the growing set of "
+    "capabilities that no amount of pretraining buys, only deployment learning.",
     5: "A new framework offers state machines and observability for agentic apps, making "
     "long-running LLM workflows debuggable and resumable rather than opaque black boxes "
-    "for on-call engineers.",
+    "for on-call engineers. Early adopters report cutting a typical multi-step agent's "
+    "failure-diagnosis time from a full afternoon of log-spelunking down to a few minutes, "
+    "and the project graduated to the Apache incubator with committers from three clouds.",
     13: "A practical walkthrough of decoding syscall traces to debug hangs and missing "
     "files, with annotated examples of the patterns that actually matter day to day.",
     16: "A well-argued thread: a $150 setup-adjusted instrument removes the fear of "
@@ -404,6 +441,8 @@ weekend = EditorialResult(
             deck="Anthropic's reversal is a reminder of how little of their stack researchers "
             "actually own — and why a local-first escape hatch matters.",
         ),
+        # 9 hits = the full weekend budget (capacity 10): the first four land in
+        # the front row, the last five on page 2 (clamped to 45-word quick hits).
         *[
             Selection(
                 item_id=f"i{n}",
@@ -412,7 +451,7 @@ weekend = EditorialResult(
                 summary=WEEKEND_HIT_OVERRIDES.get(n, CONTENT[n][3]),
                 prominence="brief",
             )
-            for n in (1, 5, 7, 9, 13, 16)
+            for n in (1, 5, 7, 9, 13, 16, 11, 14, 17)
         ],
     ],
     glossary=result.glossary[:3],
@@ -524,12 +563,16 @@ thin = EditorialResult(
 def _build_and_write(
     res: EditorialResult,
     *,
-    kind: str,
+    kind: EditionKind,
     edition_number: int,
     date_display: str,
     out_name: str,
     items_by_id: dict[str, Item] | None = None,
-) -> None:
+) -> int | None:
+    # The same text clamp production applies in enforce_budget — fixtures render
+    # with exactly the word lengths a real edition would carry, so a fixture
+    # written over-cap exercises the truncation path instead of faking geometry.
+    res = clamp_to_layout(res, kind)
     html = render_html(
         res,
         items_by_id if items_by_id is not None else items,
@@ -548,27 +591,38 @@ def _build_and_write(
     pages_display = pages if pages is not None else "?"
     size = out.stat().st_size
     print(f"[{kind}] engine={engine} size={size} bytes pages={pages_display} -> {out}")
+    return pages
 
 
-_build_and_write(
-    result,
-    kind="weekday",
-    edition_number=1,
-    date_display="Thursday, June 11, 2026",
-    out_name="data/smoke-edition.pdf",
-)
-_build_and_write(
-    weekend,
-    kind="weekend",
-    edition_number=2,
-    date_display="Saturday, June 27, 2026",
-    out_name="data/smoke-edition-weekend.pdf",
-)
-_build_and_write(
-    thin,
-    kind="weekday",
-    edition_number=3,
-    date_display="Tuesday, June 30, 2026",
-    out_name="data/smoke-edition-thin.pdf",
-    items_by_id=thin_items,
-)
+page_counts = [
+    _build_and_write(
+        result,
+        kind="weekday",
+        edition_number=1,
+        date_display="Thursday, June 11, 2026",
+        out_name="data/smoke-edition.pdf",
+    ),
+    _build_and_write(
+        weekend,
+        kind="weekend",
+        edition_number=2,
+        date_display="Saturday, June 27, 2026",
+        out_name="data/smoke-edition-weekend.pdf",
+    ),
+    _build_and_write(
+        thin,
+        kind="weekday",
+        edition_number=3,
+        date_display="Tuesday, June 30, 2026",
+        out_name="data/smoke-edition-thin.pdf",
+        items_by_id=thin_items,
+    ),
+]
+
+# The fixed two-page contract is the whole point (pipeline/layout.py): any
+# fixture landing off 2 pages is a geometry regression, so fail loudly. A None
+# just means WeasyPrint wasn't importable for the count — don't fail on that.
+off_contract = [p for p in page_counts if p is not None and p != 2]
+if off_contract:
+    print(f"FAIL: fixed two-page contract broken — page counts {page_counts}")
+    sys.exit(1)

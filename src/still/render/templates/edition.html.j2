@@ -31,6 +31,47 @@
     -webkit-hyphens: auto;
   }
 
+  /* ---------- Fixed two-page geometry ----------
+     The edition is ALWAYS exactly two pages: two fixed-height "sheet" blocks.
+     Usable page = 261.4mm tall (letter minus 9/9mm margins); 260mm leaves
+     rounding slack so a sheet can never spill a third page. A 260mm block
+     starting at the top of a page fits whole, so WeasyPrint never fragments it
+     — which sidesteps both print gotchas (the monolithic flex lead-row and the
+     multicol infinite-loop, which only bite during fragmentation).
+     The crash barrier is ABSOLUTE POSITIONING: out-of-flow content never
+     fragments across pages in WeasyPrint, so anything inside an abspos box
+     can overflow (and get clipped by overflow:hidden) but can never create a
+     page 3. Plain in-flow clip boxes are NOT enough — WeasyPrint fragments an
+     over-full block box onto new pages before paint clipping applies, and a
+     column-direction flex box doesn't help either (both verified with an
+     unclamped bloat fixture: the p2 wire's tail escaped onto page 3). Hence
+     page 1 bottom-anchors its Wire row in the abspos .wire-front, and page 2
+     wraps ALL its content in the abspos .p2-inner. In-flow content on the
+     sheets is limited to code-bounded pieces (masthead, clamped theme line)
+     plus the .lead-row — a flex ROW, the one long-proven monolithic shape.
+     Content is bounded upstream by pipeline/layout.py word caps + slot
+     counts, so the barrier should never bind; when it does, the failure mode
+     is clipped text.
+     RULE: fixed heights go on wrapper boxes — NEVER on a multicol element
+     itself (a fixed-height multicol with a break-inside:avoid child taller
+     than a column is the documented infinite-loop shape). */
+  .sheet { height: 260mm; overflow: hidden; position: relative; }
+  .sheet.p2 { break-before: page; page-break-before: always; }
+  .p2-inner { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+
+  /* Bottom-anchored wells: the page-1 Wire row and the page-2 endmatter sit at
+     a fixed distance from the page foot regardless of small height variations
+     above them — slack opens mid-page as air, never at the foot. */
+  .wire-front { position: absolute; bottom: 0; left: 0; right: 0; }
+  .wire-p1-box { height: 86mm; overflow: hidden; }
+  .endmatter { position: absolute; bottom: 0; left: 0; right: 0; }
+  /* Sized against a FULL day (13 word-capped briefs + the base 2-lesson
+     Margin). The 5-lesson Margin only happens on thin days when the wire is
+     short — adaptive lessons and wire volume trade off, never stack. Unused
+     height is invisible: the endmatter below is bottom-anchored, so in-box
+     slack IS the calm gap. */
+  .wire-p2-box { height: 182mm; overflow: hidden; }
+
   /* ---------- Masthead ---------- */
   .masthead { border-top: 3pt solid var(--ink); border-bottom: 1pt solid var(--ink); padding-bottom: 1pt; }
   .masthead-row {
@@ -78,14 +119,20 @@
   .edition-theme {
     text-align: center; font-style: italic; font-size: 9.5pt; color: #2b2a27;
     padding: 3pt 8mm 0; margin: 0;
+    max-height: 6mm; overflow: hidden; /* one line, clamped */
   }
 
   /* ---------- Lead row: feature well + rail ---------- */
-  /* Feature + rail are a flex row. The rail is kept SHORT (only Scoreboard +
-     Shows — never the lessons) so this monolithic, non-fragmenting block always
-     fits one page; an over-tall flex row would shove the whole front onto the next
-     page and blank page one. The Margin lives in its own full-width band below. */
-  .lead-row { display: flex; gap: 6mm; padding-top: 4pt; border-top: 2.5pt solid var(--ink); margin-top: 3pt; }
+  /* Feature + rail are a flex row — monolithic in print, which is fine here:
+     the row has a FIXED height (fills the front down to the bottom-anchored
+     Wire row) inside the never-fragmenting p1 sheet, so it cannot shove the
+     front onto page 2. The rail stays SHORT (only Scoreboard + Shows — never
+     the lessons); The Margin lives at the top of page 2. */
+  .lead-row {
+    display: flex; gap: 6mm; padding-top: 4pt; border-top: 2.5pt solid var(--ink); margin-top: 3pt;
+    height: 119mm; overflow: hidden;
+  }
+  body.weekend .lead-row { height: 112mm; }
   .feature { flex: 1; }
   .kicker {
     font-variant: small-caps; font-weight: 700; font-size: 8pt; letter-spacing: 3pt;
@@ -101,7 +148,8 @@
     font-style: italic; font-size: 11pt; line-height: 1.26; text-align: center; color: #2b2a27;
     max-width: 92%; margin: 0 auto 4pt; padding-bottom: 3pt; border-bottom: 0.5pt solid var(--ink);
   }
-  .feature-body { column-count: 2; column-gap: 6mm; text-align: justify; }
+  .feature-body { column-count: 2; column-gap: 6mm; text-align: justify; font-size: 9.5pt; line-height: 1.42; }
+  body.weekend .feature-body { font-size: 10.5pt; line-height: 1.5; }
   .feature-body p { margin: 0; }
   .feature-body .byline { font-variant: small-caps; letter-spacing: 0.4pt; font-weight: 700; }
   /* Floated drop cap. WeasyPrint renders this for short feature wells (verified via
@@ -139,9 +187,10 @@
   .margin-topic { font-weight: 700; font-variant: small-caps; letter-spacing: 0.3pt; }
 
   /* ---------- The Margin (full-width band) ----------
-     Lessons (up to 5) flow across four columns here, NOT in the rail: that keeps
-     the flex lead-row short enough to always fit one page (see .lead-row). */
-  .margin-band { break-inside: avoid; border-top: 1.5pt solid var(--ink); padding-top: 4pt; margin-top: 7pt; }
+     Tops page 2. Lessons (up to 5) flow across four columns; max-height guards
+     the fixed page-2 budget (sized for 5 word-capped lessons — see
+     pipeline/layout.py WORD_CAPS). */
+  .margin-band { max-height: 42mm; overflow: hidden; border-top: 1.5pt solid var(--ink); padding-top: 4pt; }
   .margin-head {
     text-align: center; font-variant: small-caps; font-weight: 700; font-size: 8.5pt;
     letter-spacing: 3pt; color: var(--accent); margin-bottom: 4pt;
@@ -155,14 +204,19 @@
     letter-spacing: 4pt; border-top: 2.5pt solid var(--ink); border-bottom: 0.5pt solid var(--ink);
     padding: 3pt 0; margin: 6pt 0 4pt;
   }
-  /* Sections flow freely across columns; only short items avoid breaking (a section
-     taller than a column would trip the documented WeasyPrint multicol loop).
-     column-count: 4 here is only the ceiling — the template inlines
-     min(wire_count, 4) (same idiom as .margin-cols below), so a thin trailing
-     page's last couple of items collapse into fewer, wider columns instead of
-     stranding across 4 narrow ones (that narrowing was inflating wrapped-line
-     height enough to force an extra near-empty page — TASK-5). */
+  .wire-band .cont { text-transform: lowercase; font-variant: normal; font-style: italic; letter-spacing: 1pt; }
+  /* The min(count, N) inline column-count idiom survives from the auto-fit era
+     (TASK-5): a degenerate thin day's 1-2 stories collapse into fewer, wider
+     columns instead of stranding across 4 narrow ones. Word caps
+     (pipeline/layout.py) keep every .witem far below a column height, so
+     break-inside:avoid is loop-safe. */
   .wire { column-count: 4; column-gap: 5mm; column-rule: 0.5pt solid var(--ink); column-fill: balance; text-align: justify; }
+  /* Page-1 front row: one story per column, tagged by section (no .wsec groups
+     — four singles from different sections). */
+  .wtag {
+    font-variant: small-caps; font-weight: 700; font-size: 7pt; letter-spacing: 1.5pt;
+    color: var(--accent); margin: 0 0 2pt; padding-bottom: 1.5pt; border-bottom: 0.5pt solid var(--ink);
+  }
   .wsec {
     font-variant: small-caps; font-weight: 700; font-size: 7pt; letter-spacing: 1.5pt;
     color: var(--accent); margin: 0 0 2pt; padding-bottom: 1.5pt; border-bottom: 0.5pt solid var(--ink);
@@ -173,6 +227,9 @@
   .witem h3 { font-weight: 700; font-size: 9.5pt; line-height: 1.1; margin: 0 0 1.5pt; hyphens: none; -webkit-hyphens: none; }
   .witem.lead h3 { font-size: 11pt; line-height: 1.08; }
   .witem p { margin: 0; font-size: 8.5pt; line-height: 1.3; }
+  /* Weekend page 2 runs fewer, larger-set stories so the page still fills. */
+  body.weekend .wire-p2 .witem h3 { font-size: 10.5pt; }
+  body.weekend .wire-p2 .witem p { font-size: 9.5pt; line-height: 1.4; }
   .byline { font-variant: small-caps; letter-spacing: 0.3pt; font-weight: 700; }
   .ref { vertical-align: super; font-size: 6.5pt; font-weight: 400; }
 
@@ -197,7 +254,8 @@
   }
 </style>
 </head>
-<body>
+<body{% if is_weekend %} class="weekend"{% endif %}>
+<section class="sheet p1">
   <header class="masthead">
     <div class="masthead-row">
       <div class="ear ear-left">
@@ -297,6 +355,27 @@
     {% endif %}
   </div>
 
+  {% if wire_p1 %}
+  <div class="wire-front">
+    <div class="wire-band">The Wire</div>
+    <div class="wire-p1-box">
+      <div class="wire wire-p1" style="column-count: {{ [wire_p1|length, 4]|min }}">
+        {% for item in wire_p1 %}
+        <article class="witem{% if item.pressing %} lead{% endif %}">
+          <p class="wtag">{{ item.section_tag }}</p>
+          <h3>{{ item.headline }}<span class="ref">{{ item.ref }}</span></h3>
+          <p><span class="byline">{{ item.source }} —</span> {{ item.summary }}</p>
+          <p class="locator">Vol. I &middot; No. {{ edition_number }} &middot; Story {{ item.ref }}</p>
+        </article>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<section class="sheet p2">
+<div class="p2-inner">
   {% if lessons %}
   <aside class="margin-band">
     <div class="margin-head">The Margin</div>
@@ -309,18 +388,20 @@
   {% endif %}
 
   {% if sections %}
-  <div class="wire-band">The Wire</div>
-  <div class="wire" style="column-count: {{ [wire_count, 4]|min }}">
-    {% for section in sections %}
-    <p class="wsec">{{ section.title }}</p>
-    {% for item in section.entries %}
-    <article class="witem{% if item.pressing %} lead{% endif %}">
-      <h3>{{ item.headline }}<span class="ref">{{ item.ref }}</span></h3>
-      <p><span class="byline">{{ item.source }} —</span> {{ item.summary }}</p>
-      <p class="locator">Vol. I &middot; No. {{ edition_number }} &middot; Story {{ item.ref }}</p>
-    </article>
-    {% endfor %}
-    {% endfor %}
+  <div class="wire-band">The Wire <span class="cont">&middot; continued</span></div>
+  <div class="wire-p2-box">
+    <div class="wire wire-p2" style="column-count: {{ [wire_p2_count, 3 if is_weekend else 4]|min }}">
+      {% for section in sections %}
+      <p class="wsec">{{ section.title }}</p>
+      {% for item in section.entries %}
+      <article class="witem{% if item.pressing %} lead{% endif %}">
+        <h3>{{ item.headline }}<span class="ref">{{ item.ref }}</span></h3>
+        <p><span class="byline">{{ item.source }} —</span> {{ item.summary }}</p>
+        <p class="locator">Vol. I &middot; No. {{ edition_number }} &middot; Story {{ item.ref }}</p>
+      </article>
+      {% endfor %}
+      {% endfor %}
+    </div>
   </div>
   {% endif %}
 
@@ -338,7 +419,9 @@
       </div>
     </section>
     {% endif %}
+    <p class="colophon">You are caught up. Anything you missed will find you if it matters.</p>
   </footer>
-  <p class="colophon">You are caught up. Anything you missed will find you if it matters.</p>
+</div>
+</section>
 </body>
 </html>

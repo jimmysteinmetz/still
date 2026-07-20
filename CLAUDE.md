@@ -38,7 +38,7 @@ Batch pipeline (spec §7), one stage per module — no services, no real-time:
 
 | Stage | Module | Status |
 |---|---|---|
-| Ingest | `src/still/ingest/` | rss + hn + reddit done (reddit needs `REDDIT_CLIENT_ID`/`SECRET` in env; its sources skip without them) |
+| Ingest | `src/still/ingest/` | rss + hn + reddit done (reddit fetches each subreddit's public `/top/.rss` feed — no credentials, no OAuth app) |
 | Normalize/Dedupe/Rank | `src/still/pipeline/` | done (crude rank — editorial does real selection) |
 | Editorial (LLM) | `src/still/pipeline/editorial.py` | done — Gemini via Vertex AI + ADC; tiers items (pressing/brief) + writes Margin lessons |
 | Almanac | `src/still/almanac/` | weather (Open-Meteo) + sports/Scoreboard (ESPN) + shows (SeatGeek) + Your Day/calendar (Google Calendar OAuth) done |
@@ -78,10 +78,12 @@ call Gemini (budget enforcement is pure code in `enforce_budget`).
   page bottom (leaving a mid-page gap on a short edition) while weasyprint hugs
   content; always confirm layout on the weasyprint output. Verified via
   `uv run scripts/smoke_render.py` (realistic multi-section content for tuning).
-- **weasyprint + multicol:** the edition is a 3-column broadsheet. weasyprint
-  infinite-loops if a multicol child has `break-inside: avoid` and is taller
-  than a column — keep that only on `.item` (short), never on `.section`. The
-  45s subprocess timeout is the backstop if it regresses.
+- **weasyprint + multicol:** weasyprint infinite-loops if an *in-flow* multicol
+  child has `break-inside: avoid` and is taller than a column — keep that only
+  on `.witem`/`.lex` (short, word-capped), never on a section wrapper. The 45s
+  subprocess timeout is the backstop if it regresses. (The fixed layout's
+  abspos wells sidestep the loop for the Wire — see the geometry entry below —
+  but the rule still holds for any new in-flow multicol.)
 - **Masthead ears + weather icons:** the masthead is one row — weather (left
   ear), nameplate+epigraph, edition meta (right ear) — filling the space that
   flanks the nameplate. Weather icons are tiny inline `stroke="currentColor"`
@@ -92,62 +94,72 @@ call Gemini (budget enforcement is pure code in `enforce_budget`).
   (`render/quotes.py`), chosen by `edition_number % len(QUOTES)` — deterministic,
   changes daily. Replaced the old tagline. To add lines, append `(quote, author)`
   to `QUOTES`; keep them short so they fit under the plate.
-- **Feature-led front (the layout):** the edition leads with a **feature well** —
-  the single marquee story (big Didot headline, an LLM-written `Selection.deck`
-  standfirst, a floated drop-cap 2-column body) beside a right **rail**. Below the
-  lead-row sits a full-width **The Margin** band, then **The Wire** — the remaining
-  stories in a 4-column multicol, grouped by section with maroon labels. `render_html`
-  (`render/html.py`) picks the marquee (first `pressing` selection, else the first
-  selection so the well is never empty) and groups the rest into `sections`; footnotes
-  number marquee-first, then section by section. `Selection.prominence`
-  (`"pressing"`/`"brief"`) only chooses the marquee + lightly emphasizes leftover
-  pressing items in The Wire. `kind` swaps the kicker ("The Lead" vs "The Weekend
-  Read") and descriptor — the layout itself is identical weekday/weekend. **One maroon
-  accent** lives behind the `--accent` CSS var (set it to the ink colour for
-  monochrome). Page count is automatic (auto-fit: a thin day is fewer pages, no
-  padding); the weasyprint `@bottom-center` folio (`page · pages`) is a nicety Chrome
-  omits. Caps stay finite (weekday 24 / weekend 10); density comes from layout + craft,
-  never from creeping the budget.
-- **The lead-row MUST fit one page (print gotcha — load-bearing):** the feature + rail
-  are a `display:flex` row, which is **monolithic in print: flex/grid can't fragment
-  across a page break**. If the row grows taller than the space under the masthead,
-  weasyprint shoves the *entire* front onto page 2, blanking page 1. So the rail holds
-  ONLY the short, bounded cards (**Scoreboard + Shows**) and **The Margin is a separate
-  full-width band BELOW the lead-row** (its lessons can number up to 5 and would make a
-  narrow rail too tall). Don't move tall/variable content back into the rail. (A
-  float-right rail was tried so the front could fragment — weasyprint collapses the
-  multicol feature-body beside a float and they *overlap*; flex + a bounded rail is the
-  working approach. The marquee length is bounded by the prompt so the well never
-  exceeds a page.)
-- **Filling two pages (the hard part):** news volume varies, so three levers keep
-  the pages full. (1) **Backfill** — the busiest section (eng) has a high quota
-  (14) and raised per-source caps (HN 8, Lobsters 5) so it absorbs slack on a
-  lopsided day; the prompt says fill ~`max_items` but keep sections balanced,
-  leaning on the busy one only when others are thin. (2) **More sources** — extra
-  AI/Cloud/Personal feeds (Raschka, The Gradient, Google AI, AWS, Azure, King
-  Arthur, Guitar World) richen the thin sections. (3) **Adaptive lessons** — see
-  below. Diagnose pool balance with `still candidates` (prints per-section
-  `N candidates, quota`); a near-empty page almost always means a thin/lopsided pool.
-- **The Margin (rotating lessons):** a full-width band between the lead-row and The
-  Wire, rendering its lessons across up to **4 columns** so the card stays short no matter
-  the count (up to 5) — see the print gotcha above for why it is NOT in the rail. The
-  `.margin-cols` `column-count` is set inline to `min(lesson_count, 4)` so a low-count
-  band (e.g. the base 2 lessons on a full day) spans the full page width instead of
-  stranding empty columns 3–4; without it the fixed 4-col frame left the band half-blank. Topics
-  are a **deck** in `almanac.lessons.deck` (config is the UI; freeform strings);
-  `pipeline/lessons.py` `topics_for` rotates them by `edition_number` (same math as
-  `quotes.epigraph_for`), `brief_for` maps known keys → a richer LLM brief (unknown
-  keys humanize the raw string; `sports_trivia` injects followed teams/series). The
-  LLM only *writes* the lessons (`EditorialResult.lessons`, `topic/title/body`); code
-  picks the topics and clamps the count in `enforce_budget`. **Count is adaptive:**
-  `lesson_count_for` returns the base `per_edition` on a full day but expands (one
-  extra per ~4 items short of `FILL_TARGET_ITEMS=18`, capped at `HARD_MAX_LESSONS=5`
-  and the deck size) so educational content fills a thin day instead of weak news —
-  `build_prompt` requests that many and `enforce_budget` clamps to the same number
-  (both via `projected_item_count`). `edition_number` is computed before the editorial
-  call in `cli.build` and threaded through `select_and_summarize` → `build_prompt`.
-  Keep lessons SHORT — the band lays them out in up to 4 columns with `break-inside:avoid`,
-  so 5 lessons stay a couple of lines tall; don't let bodies balloon.
+- **Fixed two-page geometry (the layout contract — load-bearing):** the edition
+  is ALWAYS exactly two pages; nothing auto-fits. `src/still/pipeline/layout.py`
+  is the single tuning surface: `P1_WIRE_SLOTS=4`, `P2_WIRE_SLOTS` (weekday 13 /
+  weekend 5), `WORD_CAPS` per kind + tier (marquee/front/brief/deck/headline/
+  theme/lesson/gloss/french), `capacity()` (weekday 18 / weekend 10 — the hard
+  story ceiling `enforce_budget` clamps config's `max_items` to), and
+  `split_wire()` — the marquee/front/rest split used by BOTH
+  `editorial.enforce_budget` (via `clamp_to_layout`, which truncates every text
+  field to its tier cap at a sentence boundary) and `render.html.render_html`,
+  so each story is truncated to the exact box it lands in. Region mm heights
+  live in `edition.html.j2` (`.sheet` 260mm ×2, `.lead-row` 119/112,
+  `.wire-p1-box` 86, `.wire-p2-box` 182, `.margin-band` ≤42); a `weekend` body
+  class carries the weekend overrides. **Page 1:** masthead → theme line →
+  lead-row (feature well + Scoreboard/Shows rail, fixed height) → the abspos
+  bottom-anchored `.wire-front`: "The Wire", 4 stories, one per column, each
+  with a `.wtag` section kicker (pressing stories fill these slots first, then
+  model order). **Page 2:** everything inside the abspos `.p2-inner` — The
+  Margin at the TOP, "The Wire · continued" (grouped by section, 4 cols
+  weekday / 3 cols bigger-type weekend), and the Lexicon + colophon pinned to
+  the page FOOT (`.endmatter`, abspos bottom). Slack opens mid-page as calm
+  air above the Lexicon, never reflow. Footnotes number marquee → front row →
+  page-2 sections. Prompts ask for exactly 5 pressing (1 marquee at 150–190
+  words weekday / 150–210 weekend + 4 front at 70–90) and state that over-cap
+  text is machine-truncated. Caps stay finite; NEVER solve a layout problem by
+  raising them — cut harder (that's how weekday went 24→19→18: 14 worst-case
+  briefs measurably didn't fit, so a slot was cut, not the type squeezed).
+- **Why abspos + flex, not overflow clipping (print gotchas — load-bearing):**
+  three hard-won weasyprint facts. (1) `overflow: hidden` does NOT stop an
+  over-full in-flow block from spilling extra pages — fragmentation runs
+  before paint clipping, so an unbreakable `.witem` taller than its column
+  escaped onto a page 3 (verified with an unclamped bloat fixture). (2)
+  Column-direction flex doesn't help, and `max-height` is ignored by
+  weasyprint flex layout; only a flex ROW (the `.lead-row`) is reliably
+  monolithic. (3) **Out-of-flow (absolutely positioned) content never
+  fragments across pages** — hence `.wire-front` and the whole-page
+  `.p2-inner` wrapper: any overflow is clipped in place, never a new page,
+  and even a 70x word-cap violation renders exactly 2 pages without tripping
+  the multicol loop. In-flow sheet content is limited to code-bounded pieces
+  (masthead, the clamped theme line, the fixed-height flex lead-row). The
+  rail still holds ONLY Scoreboard + Shows; don't move variable-height
+  content into it.
+- **Filling the fixed pages:** the pool levers still matter — a thin pool now
+  shows up as a gap above the Lexicon instead of a short paper. (1) **Backfill**
+  — eng's high quota (14) + raised per-source caps absorb slack on a lopsided
+  day; the prompt says fill ~`max_items` but keep sections balanced. (2) **More
+  sources** richen thin sections. (3) **Adaptive lessons** — see below.
+  Diagnose pool balance with `still candidates`; a large page-2 gap almost
+  always means a thin/lopsided pool.
+- **The Margin (rotating lessons):** the full-width band at the TOP of page 2,
+  rendering its lessons across up to **4 columns** (inline
+  `min(lesson_count, 4)` so a low-count band spans the width instead of
+  stranding empty columns). Topics are a **deck** in `almanac.lessons.deck`
+  (config is the UI; freeform strings); `pipeline/lessons.py` `topics_for`
+  rotates them by `edition_number` (same math as `quotes.epigraph_for`),
+  `brief_for` maps known keys → a richer LLM brief (unknown keys humanize the
+  raw string; `sports_trivia` injects followed teams/series). The LLM only
+  *writes* the lessons (`EditorialResult.lessons`, `topic/title/body`); code
+  picks the topics and clamps the count in `enforce_budget`. **Count is
+  adaptive:** `lesson_count_for` returns the base `per_edition` on a full day
+  but expands (one extra per ~4 items short of `FILL_TARGET_ITEMS`, which is
+  now derived as `layout.capacity("weekday")`=18, capped at
+  `HARD_MAX_LESSONS=5` and the deck size) so educational content fills a thin
+  day — and the geometry is self-balancing: a 5-lesson Margin (its ≤42mm
+  guard) only occurs when the wire is short, so they never stack against a
+  full page 2. Lesson bodies are word-capped (`WORD_CAPS["lesson"]`) like all
+  other text.
 - **Lexicon footer + condensed Sources:** the foot of the page carries a
   **Lexicon** — the editorial LLM returns `glossary` (uncommon acronyms/terms
   pulled from the selected items) and `french_vocab` (a few interesting French
@@ -251,6 +263,23 @@ call Gemini (budget enforcement is pure code in `enforce_budget`).
   if still relevant. (`still candidates --mark-seen` intentionally keeps
   whole-pool semantics — it's a no-LLM preview command with no "selected" set
   to narrow against.)
+- **Reddit ingestion is RSS, not OAuth (`ingest/reddit.py`):** Reddit closed
+  self-service API app registration in late 2025 under its Responsible Builder
+  Policy — `reddit.com/prefs/apps` "create app" no longer creates anything, it
+  just bounces to that policy; new OAuth apps now need a manual approval
+  ticket. So `reddit.fetch()` hits each subreddit's public
+  `https://www.reddit.com/r/{sub}/top/.rss?t=day&limit=N` feed over the shared
+  httpx.Client (same idiom as rss.py/hn.py) — no app, no credentials, no
+  `REDDIT_CLIENT_ID`/`SECRET` (removed from `.env.example`), praw/prawcore
+  dropped from pyproject.toml. The feed carries no upvote score, so
+  `RedditSource.min_upvotes` is gone from config — `/top/.rss` is already
+  best-first, `max_items` caps depth. Link vs. self-post detection regexes the
+  feed's fixed `[link]`/`[comments]` anchor spans in the entry's HTML content
+  (stable, widely-relied-on reddit RSS template); self-text comes from the
+  `SC_OFF`/`SC_ON` div, tags stripped + HTML-unescaped. Being unauthenticated,
+  it's more 429-prone than an OAuth-backed client — a rate-limited subreddit
+  just skips that source for the day (spec §12 graceful-fail), no retry added
+  since daily volume (3 subreddits, one build/day) rarely trips it.
 - The LLM never controls the budget: `editorial.enforce_budget` clamps
   selections to section quotas + edition cap in code. Keep it that way.
 - Jinja context uses `entries`, not `items`, for section rows (dict.items
@@ -292,18 +321,20 @@ call Gemini (budget enforcement is pure code in `enforce_budget`).
   `ingest/`.
 - Dependencies are added per-phase, not up front. Installed for rendering:
   `pillow` (crest monochrome processing), `google-auth-oauthlib` (Your Day OAuth consent;
-  the Calendar API call itself rides on httpx), `praw` (reddit ingestion). Ask
-  before adding others.
+  the Calendar API call itself rides on httpx). Reddit ingestion rides on
+  `httpx`/`feedparser` like every other adapter — no reddit-specific
+  dependency. Ask before adding others.
 
 ## Roadmap position
 
-`still build` runs fetch → editorial (Gemini) → a dense **bold feature-led** PDF.
-Masthead has a live Weather ear + a rotating philosopher epigraph (`render/quotes.py`);
-the front leads with a **feature well** (the marquee story + its LLM-written deck,
-beside a **Scoreboard + Shows** rail), then a full-width **The Margin** band (rotating
-LLM-written lessons), then **The Wire** (the rest, grouped by section); the foot closes
-with a **Lexicon** (glossary + French vocab) above a one-line condensed Sources footer.
-A single maroon `--accent` colours kickers/section labels. Almanac done:
+`still build` runs fetch → editorial (Gemini) → a dense **bold feature-led** PDF on a
+**fixed two-page grid** (see the geometry entry in Quirks). Masthead has a live
+Weather ear + a rotating philosopher epigraph (`render/quotes.py`); page 1 leads with
+a **feature well** (the marquee story + its LLM-written deck, beside a **Scoreboard +
+Shows** rail) over a 4-story **Wire front row**; page 2 opens with **The Margin**
+(rotating LLM-written lessons), continues **The Wire** (the rest, grouped by
+section), and pins the **Lexicon** (glossary + French vocab) to the foot. A single
+maroon `--accent` colours kickers/section labels. Almanac done:
 **Weather, Sports, Shows, Lessons, Your Day (Google Calendar)**. Content sections
 (spec §4B) are now **AI, Engineering, Cloud, Sports, Music & Shows, New York, Personal**
 — the non-tech ones (team blogs, indie-music/show feeds, NYC places/food) were added so
@@ -331,9 +362,25 @@ fallback deck (`render/vocab.py`) so the Lexicon never empties. The hard bug fou
 fixed mid-redesign: a `display:flex` lead-row can't fragment in print, so an over-tall
 front blanked page 1 — fixed by bounding the rail (Scoreboard + Shows only) and moving
 The Margin to its own full-width band (see the print gotcha in Quirks). Both edition
-types tuned offline via the two-volume `scripts/smoke_render.py`. Watch the weekend: a
-long marquee + the 10-item cap lands at ~1.5–2 pages — drop the weekend `max_items` if
-you want it to settle onto a single dense page.
+types tuned offline via the two-volume `scripts/smoke_render.py`. (The auto-fit page
+count described here was replaced by the fixed two-page geometry on 2026-07-19 — see
+below.)
+
+**Deterministic fixed two-page geometry (2026-07-19):** replaced auto-fit sizing after
+live editions kept landing at 3 pages / stranded footers (Jul 19: near-blank page 3;
+Jul 18: "The Wire" label over dead space). The edition is now ALWAYS exactly two
+pages: fixed slots (marquee + 4 front-row + 13/5 page-2 stories), word caps enforced
+by code truncation in `enforce_budget`→`clamp_to_layout` (prompts retargeted to
+match), The Margin moved to the top of page 2, Lexicon pinned to the page-2 foot,
+weekday `max_items` 24→18 (= `layout.capacity`). New module `pipeline/layout.py` is
+the single tuning surface (slots, WORD_CAPS, `split_wire` shared by editorial +
+render). Verified offline: all three `scripts/smoke_render.py` fixtures print
+`pages=2` (the script now exits 1 otherwise) with zero clipped stories (pypdf locator
+check), and an unclamped 70x-over-cap bloat fixture still renders exactly 2 pages —
+overflow degrades to clipped text, never an extra page (see the abspos/flex print
+gotcha in Quirks). **Not yet verified live** — needs a real `still build` to confirm
+Gemini writes to the new 150–190-word marquee / 70–90-word front targets and that the
+truncation warn-log stays quiet.
 
 **Your Day (Google Calendar):** built + verified **offline** on 2026-07-03 — 79 tests green
 (incl. `tests/test_calendar.py`: first/last/count, all-day + declined filtered, weekend
@@ -366,7 +413,9 @@ so shows-card artists must be mirrored there by hand). Re-run it every few month
 Spotify's API returns no genre tags for newer apps, so genre wording stays hand-written.
 
 **Immediate next steps (in order):**
-1. **Email delivery** then **Cloud Run job + Cloud Scheduler** (region us-east4),
+1. **Live `still build`** to verify the fixed two-page geometry with real Gemini
+   output (marquee/front word targets land, truncation warnings quiet, page 2 fills).
+2. **Email delivery** then **Cloud Run job + Cloud Scheduler** (region us-east4),
    editions archived to GCS — the rest of Phase 2. (When the job goes live, the Your Day
    token → Secret Manager → the Cloud Run env, like `SEATGEEK_CLIENT_ID`.)
 

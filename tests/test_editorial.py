@@ -6,11 +6,16 @@ from still.config import StillConfig, load_config
 from still.models import Item
 from still.pipeline.editorial import (
     EditorialResult,
+    FrenchEntry,
+    GlossaryEntry,
     Lesson,
     Selection,
+    _finalize_french_vocab,
+    _truncate_words,
     build_prompt,
     enforce_budget,
 )
+from still.pipeline.layout import WORD_CAPS, capacity
 from still.pipeline.lessons import HARD_MAX_LESSONS, lesson_count_for, projected_item_count
 
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
@@ -141,6 +146,69 @@ def test_prompt_omits_recent_topics_section_when_empty() -> None:
     assert "Recently covered" not in prompt
 
 
+def test_prompt_contains_recent_lessons_and_avoid_instruction() -> None:
+    cfg = load_config()
+    recent_lessons = [("philosophy", "Philosophy", "The trolley problem.")]
+    prompt = build_prompt([make_item(1)], cfg, "weekday", 1, [], recent_lessons=recent_lessons)
+    assert "Recently covered Margin lessons" in prompt
+    assert "The trolley problem." in prompt
+    assert "write something different" in prompt.lower()
+
+
+def test_prompt_omits_recent_lessons_section_when_empty() -> None:
+    cfg = load_config()
+    prompt = build_prompt([make_item(1)], cfg, "weekday", 1, [], recent_lessons=[])
+    assert "Recently covered Margin lessons" not in prompt
+
+
+def test_prompt_omits_recent_lessons_when_lessons_disabled() -> None:
+    """Even with non-empty recent_lessons history, a lessons-disabled/deckless
+    config must not inject the recent-lessons block — there's no Margin section
+    in the prompt for it to attach to."""
+    cfg = load_config()
+    cfg.almanac.lessons.enabled = False
+    recent_lessons = [("philosophy", "Philosophy", "The trolley problem.")]
+    prompt = build_prompt([make_item(1)], cfg, "weekday", 1, [], recent_lessons=recent_lessons)
+    assert "Recently covered Margin lessons" not in prompt
+    assert "The trolley problem." not in prompt
+
+
+def test_lexicon_brief_contains_avoid_french_words() -> None:
+    cfg = load_config()
+    prompt = build_prompt([make_item(1)], cfg, "weekday", 1, [], recent_french=["flâner"])
+    assert "Do not reuse any of these recently used words" in prompt
+    assert "flâner" in prompt
+
+
+def test_lexicon_brief_omits_avoid_french_when_empty() -> None:
+    cfg = load_config()
+    prompt = build_prompt([make_item(1)], cfg, "weekday", 1, [], recent_french=[])
+    assert "Do not reuse any of these recently used words" not in prompt
+
+
+def test_finalize_french_vocab_noop_when_no_recent() -> None:
+    """At/above LEXICON_BRIEF's stated minimum of 3, nothing recent to avoid ->
+    entries pass through unchanged (no drop, no top-up)."""
+    entries = [
+        FrenchEntry(word="flâner", gloss="to wander"),
+        FrenchEntry(word="terroir", gloss="the soil, climate, and place"),
+        FrenchEntry(word="bricolage", gloss="tinkering"),
+    ]
+    assert _finalize_french_vocab(entries, 1, []) == entries
+
+
+def test_finalize_french_vocab_drops_repeats_and_tops_up() -> None:
+    entries = [
+        FrenchEntry(word="flâner", gloss="to wander"),
+        FrenchEntry(word="terroir", gloss="the soil, climate, and place"),
+    ]
+    out = _finalize_french_vocab(entries, 1, ["flâner"])
+    words = [e.word for e in out]
+    assert "flâner" not in words
+    assert "terroir" in words
+    assert len(out) >= 3  # topped up to LEXICON_BRIEF's stated minimum
+
+
 def test_prompt_contains_eng_style_guidance() -> None:
     """TASK-7: the eng section's config-driven `style` guidance (non-specialist
     register, vulnerability stories lead with plain-English impact) must reach
@@ -239,3 +307,80 @@ def test_lessons_clamp_unaffected_when_selection_matches_projection() -> None:
     result.lessons = [Lesson(topic="t", title=f"T{n}", body="b") for n in range(HARD_MAX_LESSONS)]
     out = enforce_budget(result, items, cfg, "weekday")
     assert len(out.lessons) == requested  # unchanged from the pre-hoc pool estimate
+
+
+# --- fixed-layout word caps (pipeline/layout.py WORD_CAPS, enforced here) ---
+
+SENTENCE = "alpha beta gamma delta epsilon zeta eta theta iota kappa."  # 10 words
+
+
+def prose(sentences: int) -> str:
+    return " ".join([SENTENCE] * sentences)
+
+
+def test_truncate_words_under_cap_unchanged() -> None:
+    text = prose(3)
+    assert _truncate_words(text, 30) == text
+    assert _truncate_words(text, 31) == text
+
+
+def test_truncate_words_drops_whole_trailing_sentences() -> None:
+    # 5 sentences / 50 words at a 35-word cap -> keep 3 whole sentences (30
+    # words), never a mid-sentence cut, no ellipsis.
+    out = _truncate_words(prose(5), 35)
+    assert out == prose(3)
+    assert not out.endswith("…")
+
+
+def test_truncate_words_hard_cuts_a_run_on() -> None:
+    # A single 40-word sentence can't be sentence-truncated to 15 — hard word
+    # cut with a visible ellipsis is the fallback.
+    run_on = "word " * 39 + "word."
+    out = _truncate_words(run_on, 15)
+    assert out == "word " * 14 + "word…"
+
+
+def test_enforce_budget_truncates_by_layout_tier() -> None:
+    """The marquee, the 4 front-row stories, and page-2 briefs each get their
+    own WORD_CAPS allowance; decks, lessons, and the Lexicon are capped too."""
+    cfg = load_config()
+    caps = WORD_CAPS["weekday"]
+    n = 8  # 1 marquee + 4 front + 3 briefs, under the ai(6)+eng(8) quotas
+    items = [make_item(i, "ai" if i < 4 else "eng") for i in range(n)]
+    selections = []
+    for i in range(n):
+        s = sel(i, "ai" if i < 4 else "eng")
+        s.prominence = "pressing" if i == 0 else "brief"
+        s.summary = prose(30)  # 300 words, over every cap
+        selections.append(s)
+    selections[0].deck = "deck " * 29 + "deck"  # 30-word run-on, over the deck cap
+    result = make_result(selections)
+    result.lessons = [Lesson(topic="t", title="T", body=prose(10))]
+    result.glossary = [GlossaryEntry(term="X", definition=prose(4))]
+    result.french_vocab = [FrenchEntry(word="mot", gloss=prose(3))]
+    out = enforce_budget(result, items, cfg, "weekday")
+
+    def words(text: str) -> int:
+        return len(text.split())
+
+    by_id = {s.item_id: s for s in out.selections}
+    assert words(by_id["item0"].summary) == caps["marquee"] // 10 * 10  # whole sentences
+    assert words(by_id["item0"].deck) <= caps["deck"] + 1  # hard cut carries "…"
+    for front_id in ("item1", "item2", "item3", "item4"):
+        assert words(by_id[front_id].summary) <= caps["front"]
+    for brief_id in ("item5", "item6", "item7"):
+        assert words(by_id[brief_id].summary) <= caps["brief"]
+    assert words(out.lessons[0].body) <= caps["lesson"]
+    assert words(out.glossary[0].definition) <= caps["gloss"]
+    assert words(out.french_vocab[0].gloss) <= caps["french"]
+
+
+def test_capacity_clamps_even_if_config_asks_for_more() -> None:
+    """still.yaml can lower the budget below the fixed layout's capacity but
+    never raise it above — the geometry is the harder ceiling."""
+    cfg = load_config()
+    cfg.edition.weekday.max_items = 30  # config schema allows it; layout doesn't
+    items = _items_filling_all_quotas(cfg)
+    selections = [sel(i, items[i].section) for i in range(25)]
+    out = enforce_budget(make_result(selections), items, cfg, "weekday")
+    assert len(out.selections) == capacity("weekday")

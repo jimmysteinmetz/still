@@ -10,6 +10,7 @@ never trusted to the LLM.
 import json
 import logging
 import os
+import re
 from typing import Literal
 
 from google import genai
@@ -18,6 +19,11 @@ from pydantic import BaseModel
 
 from still.config import StillConfig
 from still.models import Item
+from still.pipeline.layout import WORD_CAPS, capacity, split_wire
+
+# EditionKind moved to pipeline/layout.py (the fixed-layout contract) — re-export
+# so cli.py and callers keep addressing it as editorial.EditionKind.
+from still.pipeline.layout import EditionKind as EditionKind
 from still.pipeline.lessons import (
     brief_for,
     lesson_count_for,
@@ -71,9 +77,6 @@ def _make_client() -> genai.Client:
         location=os.environ.get("GOOGLE_CLOUD_LOCATION", DEFAULT_LOCATION),
         http_options=http_options,
     )
-
-
-EditionKind = Literal["weekday", "weekend"]
 
 
 class Selection(BaseModel):
@@ -130,6 +133,10 @@ MAX_FRENCH = 4
 # Safety valve against prompt bloat if dedup_lookback_days is raised toward its
 # ceiling (config.py) — not expected to bind at the 7-day default.
 MAX_RECENT_TOPICS = 150
+# Same idea for the lesson/vocab history blocks below — lessons/vocab accumulate
+# far slower than news items (a handful per edition), so these rarely bind either.
+MAX_RECENT_LESSONS = 50
+MAX_RECENT_FRENCH = 60
 # Lesson count is dynamic (base per_edition, expanded on thin-news days to fill the
 # page) — see pipeline/lessons.lesson_count_for. It's still pure code, never the LLM.
 
@@ -143,7 +150,7 @@ required, never leave them empty:
   would make a reader pause. If the news is light, still find at least 3.
 - french_vocab: 3 to {max_french} interesting or useful French words or idioms
   (need not come from the news) with a concise English gloss — a small daily
-  indulgence for a Francophile reader. Vary them day to day."""
+  indulgence for a Francophile reader. Vary them day to day.{avoid_french}"""
 
 RECENT_TOPICS_BRIEF = """\
 ## Recently covered (last {days} days — do not re-select these stories)
@@ -161,6 +168,13 @@ lesson of 2-4 sentences (timeless, not tied to today's news). Return them as
 `lessons`, echoing the topic key in `topic` and a short human label in `title`.
 Topics for this edition:
 {topic_lines}"""
+
+RECENT_LESSONS_BRIEF = """\
+## Recently covered Margin lessons (last {days} days — write something different)
+Even if today's topic category repeats, do not reuse the same fact, story, or
+angle as any of these already-published lessons — pick a different example,
+era, or angle instead.
+{lesson_lines}"""
 
 WEEKDAY_BRIEF = """\
 You are the editor of a dense two-page personal daily newspaper. The reader's
@@ -184,15 +198,16 @@ cut a fact. Trusted-source items deserve the benefit of the doubt; firehose
 items must earn their place by clearly matching the reader's interests. Skip
 engagement bait, outrage, and incremental news.
 
-Set each item's `prominence`: "pressing" for the few stories that genuinely
-demand attention today (the real headlines a reader must not miss), "brief" for
-everything else. Most items are "brief"; reserve "pressing" for the lead stories.
-For the single most important "pressing" story (it anchors the front as the
-marquee), give it a fuller treatment than the briefs — a 4 to 5 sentence, 90 to
-120 word summary (at least twice the length of a brief, held to the same
-requirement to preserve every concrete number, rank, and before/after value) —
-and also write a `deck`: a one-line standfirst of at most 18 words that expands
-the headline with a hook. Leave `deck` empty for every other item.
+Set each item's `prominence`: mark exactly five stories "pressing" — they build
+the front page — and everything else "brief". The single most important pressing
+story anchors the front as the marquee: give it a 2 to 3 paragraph, 150 to 190
+word treatment (held to the same requirement to preserve every concrete number,
+rank, and before/after value) and also write a `deck`: a one-line standfirst of
+at most 18 words that expands the headline with a hook. The other four pressing
+stories fill the front row below the marquee — give each a fuller 70 to 90 word
+summary. Leave `deck` empty for every other item. Word counts are enforced:
+anything over its cap is machine-truncated at a sentence boundary, so write to
+length rather than past it.
 
 Also write one short edition headline capturing the day's theme.
 
@@ -210,10 +225,14 @@ Preserve every concrete detail from the source — exact numbers, percentages,
 dollar figures, dates, and full before/after values for any ranking or
 comparison ("climbed from #8 to #3," not "moved up the rankings") — a reader
 should never have to open the original article to learn a figure you already
-had. Then pick at most {max_items_minus_one} supporting quick hits, each a 1-2
-sentence, 25 to 40 word summary (leave their `deck` empty) held to the same
-standard: real figures, not vague gestures at them. Depth over breadth. Never
-exceed {max_items} items total. Also write one edition headline.
+had. Then pick at most {max_items_minus_one} supporting quick hits (leave their
+`deck` empty), held to the same standard: real figures, not vague gestures at
+them. The first four hits you list lead the front page below the marquee — give
+each a fuller 70 to 90 word summary; each remaining hit is a 1-2 sentence, 25
+to 40 word summary. Word counts are enforced: anything over its cap is
+machine-truncated at a sentence boundary, so write to length rather than past
+it. Depth over breadth. Never exceed {max_items} items total. Also write one
+edition headline.
 
 Set the marquee story's `prominence` to "pressing" and the supporting hits to
 "brief".
@@ -223,18 +242,49 @@ Set the marquee story's `prominence` to "pressing" and the supporting hits to
 {lexicon}"""
 
 
+def _finalize_french_vocab(
+    entries: list[FrenchEntry], edition_number: int, recent_french: list[str]
+) -> list[FrenchEntry]:
+    """Hard backstop for the Lexicon's french_vocab: LEXICON_BRIEF only *asks* the
+    model to vary words day to day and avoid the recent list — models don't always
+    comply (this Lexicon has gone empty outright before, e.g. 2026-06-27). Drop any
+    word seen in `recent_french`, then top up to at least 3 (LEXICON_BRIEF's stated
+    minimum) from the avoid-aware fallback deck so a partially-repeated response
+    gets fixed too, not just a fully-empty one."""
+    from still.render.vocab import french_fallback
+
+    avoid = set(recent_french)
+    kept = [e for e in entries if e.word not in avoid]
+    needed = max(3 - len(kept), 0)
+    if needed:
+        already = avoid | {e.word for e in kept}
+        kept += [
+            FrenchEntry(word=w, gloss=g)
+            for w, g in french_fallback(edition_number, needed, avoid=already)
+        ]
+    return kept
+
+
 def select_and_summarize(
     candidates: list[Item],
     cfg: StillConfig,
     kind: EditionKind,
     edition_number: int,
     recent_topics: list[str],
+    recent_lessons: list[tuple[str, str, str]] | None = None,
+    recent_french: list[str] | None = None,
 ) -> EditorialResult:
+    # History (last dedup_lookback_days), not today's output — see result.lessons /
+    # result.french_vocab below for what this edition actually produced.
+    recent_lessons = recent_lessons or []
+    recent_french = recent_french or []
     client = _make_client()
     try:
         response = client.models.generate_content(
             model=os.environ.get("STILL_GEMINI_MODEL", DEFAULT_MODEL),
-            contents=build_prompt(candidates, cfg, kind, edition_number, recent_topics),
+            contents=build_prompt(
+                candidates, cfg, kind, edition_number, recent_topics, recent_lessons, recent_french
+            ),
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=EditorialResult,
@@ -257,16 +307,11 @@ def select_and_summarize(
     if not isinstance(result, EditorialResult):
         result = EditorialResult.model_validate_json(response.text or "")
     result = enforce_budget(result, candidates, cfg, kind)
-    # The Lexicon is a structural footer element now; never let it vanish because
-    # the model declined to fill it (it has, e.g. the 2026-06-27 edition). French
-    # falls back to a built-in rotating deck; glossary is content-derived, so we
-    # can only flag it rather than invent terms.
-    if not result.french_vocab:
-        from still.render.vocab import french_fallback
-
-        result.french_vocab = [
-            FrenchEntry(word=w, gloss=g) for w, g in french_fallback(edition_number, 3)
-        ]
+    # The Lexicon is a structural footer element now; never let it vanish or repeat
+    # because the model declined to comply (it has, e.g. the 2026-06-27 edition).
+    # Glossary is content-derived, so we can only flag an empty one rather than
+    # invent terms.
+    result.french_vocab = _finalize_french_vocab(result.french_vocab, edition_number, recent_french)
     if not result.glossary:
         logger.warning("editorial: model returned an empty glossary for this edition")
     return result
@@ -278,9 +323,25 @@ def build_prompt(
     kind: EditionKind,
     edition_number: int,
     recent_topics: list[str],
+    recent_lessons: list[tuple[str, str, str]] | None = None,
+    recent_french: list[str] | None = None,
 ) -> str:
+    # History (last dedup_lookback_days), not today's selections — see the
+    # "Recently covered"/"Recently covered Margin lessons" prompt sections below.
+    recent_lessons = recent_lessons or []
+    recent_french = recent_french or []
     max_items = (cfg.edition.weekday if kind == "weekday" else cfg.edition.weekend).max_items
-    lexicon = LEXICON_BRIEF.format(max_glossary=MAX_GLOSSARY, max_french=MAX_FRENCH)
+    if recent_french:
+        avoid_french = (
+            " Do not reuse any of these recently used words: "
+            + ", ".join(dict.fromkeys(recent_french[:MAX_RECENT_FRENCH]))
+            + "."
+        )
+    else:
+        avoid_french = ""
+    lexicon = LEXICON_BRIEF.format(
+        max_glossary=MAX_GLOSSARY, max_french=MAX_FRENCH, avoid_french=avoid_french
+    )
     if recent_topics:
         recent_topic_lines = "\n".join(
             f"- {t}" for t in dict.fromkeys(recent_topics[:MAX_RECENT_TOPICS])
@@ -295,6 +356,14 @@ def build_prompt(
     if topics:
         topic_lines = "\n".join(f"- {t}: {brief_for(t, cfg)}" for t in topics)
         lessons = LESSONS_BRIEF.format(n=len(topics), topic_lines=topic_lines)
+        if recent_lessons:
+            lesson_lines = "\n".join(
+                f"- [{topic}] {title}: {body}"
+                for topic, title, body in recent_lessons[:MAX_RECENT_LESSONS]
+            )
+            lessons += "\n\n" + RECENT_LESSONS_BRIEF.format(
+                days=cfg.edition.dedup_lookback_days, lesson_lines=lesson_lines
+            )
     else:
         lessons = ""
     brief = (WEEKDAY_BRIEF if kind == "weekday" else WEEKEND_BRIEF).format(
@@ -337,11 +406,53 @@ def build_prompt(
     )
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _truncate_words(text: str, max_words: int) -> str:
+    """Clamp text to at most max_words — the guarantee behind the fixed layout
+    (prompts only *ask* for a length; this enforces it). Prefers dropping whole
+    trailing sentences so the cut is invisible; if even the first sentence
+    exceeds the cap, hard-cut at a word boundary with an ellipsis (rare — the
+    prompt targets sit well under the caps; warn so it's visible in build logs)."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    kept: list[str] = []
+    total = 0
+    for sentence in _SENTENCE_SPLIT.split(text.strip()):
+        n = len(sentence.split())
+        if total + n > max_words:
+            break
+        kept.append(sentence)
+        total += n
+    if kept:
+        return " ".join(kept)
+    logger.warning("editorial: hard-truncating a %d-word run-on to %d words", len(words), max_words)
+    return " ".join(words[:max_words]).rstrip(".,;:—–-") + "…"
+
+
+def _truncate_selection(
+    sel: Selection, summary_cap: int, deck_cap: int, headline_cap: int
+) -> Selection:
+    update = {
+        "summary": _truncate_words(sel.summary, summary_cap),
+        "headline": _truncate_words(sel.headline, headline_cap),
+    }
+    if sel.deck:
+        update["deck"] = _truncate_words(sel.deck, deck_cap)
+    return sel.model_copy(update=update)
+
+
 def enforce_budget(
     result: EditorialResult, candidates: list[Item], cfg: StillConfig, kind: EditionKind
 ) -> EditorialResult:
-    """Clamp the model's selection to the hard caps; drop unknown/duplicate ids."""
-    max_items = (cfg.edition.weekday if kind == "weekday" else cfg.edition.weekend).max_items
+    """Clamp the model's selection to the hard caps; drop unknown/duplicate ids.
+    Also clamps every text field to the fixed layout's WORD_CAPS — the two-page
+    geometry only holds if no summary can outgrow its box."""
+    configured = (cfg.edition.weekday if kind == "weekday" else cfg.edition.weekend).max_items
+    # config may ask for fewer stories than the fixed layout holds, never more.
+    max_items = min(configured, capacity(kind))
     by_id = {i.id: i for i in candidates}
     section_ids = {s.id for s in cfg.sections}
     section_caps = {s.id: s.max_items for s in cfg.sections}
@@ -395,10 +506,51 @@ def enforce_budget(
     requested_lessons = lesson_count_for(cfg, projected)
     actual_lessons = lesson_count_for(cfg, len(kept))
     max_lessons = max(requested_lessons, actual_lessons)
+    return clamp_to_layout(
+        EditorialResult(
+            edition_headline=result.edition_headline,
+            selections=kept,
+            glossary=result.glossary[:MAX_GLOSSARY],
+            french_vocab=result.french_vocab[:MAX_FRENCH],
+            lessons=result.lessons[:max_lessons],
+        ),
+        kind,
+    )
+
+
+def clamp_to_layout(result: EditorialResult, kind: EditionKind) -> EditorialResult:
+    """Truncate every text field to the fixed layout's WORD_CAPS, by tier: the
+    marquee and the four front-row stories get fuller allowances than the page-2
+    briefs. Uses the SAME split_wire as render_html, so each story is truncated
+    to the box it will land in. Called by enforce_budget; also used by
+    scripts/smoke_render.py so offline fixtures carry exactly the text lengths
+    production would."""
+    caps = WORD_CAPS[kind]
+    marquee, front, _rest = split_wire(result.selections, kind)
+    marquee_id = marquee.item_id if marquee is not None else None
+    front_ids = {s.item_id for s in front}
+
+    def _summary_cap(sel: Selection) -> int:
+        if sel.item_id == marquee_id:
+            return caps["marquee"]
+        return caps["front"] if sel.item_id in front_ids else caps["brief"]
+
     return EditorialResult(
-        edition_headline=result.edition_headline,
-        selections=kept,
-        glossary=result.glossary[:MAX_GLOSSARY],
-        french_vocab=result.french_vocab[:MAX_FRENCH],
-        lessons=result.lessons[:max_lessons],
+        edition_headline=_truncate_words(result.edition_headline, caps["theme"]),
+        selections=[
+            _truncate_selection(s, _summary_cap(s), caps["deck"], caps["headline"])
+            for s in result.selections
+        ],
+        glossary=[
+            g.model_copy(update={"definition": _truncate_words(g.definition, caps["gloss"])})
+            for g in result.glossary
+        ],
+        french_vocab=[
+            f.model_copy(update={"gloss": _truncate_words(f.gloss, caps["french"])})
+            for f in result.french_vocab
+        ],
+        lessons=[
+            les.model_copy(update={"body": _truncate_words(les.body, caps["lesson"])})
+            for les in result.lessons
+        ],
     )

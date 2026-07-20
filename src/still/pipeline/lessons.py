@@ -11,6 +11,7 @@ consumes it (quotes.py lives in `render/` for the same reason).
 
 from still.config import StillConfig
 from still.models import Item
+from still.pipeline.layout import capacity
 
 # Known topic keys → a richer one-line brief steering the LLM. Unknown keys fall back
 # to the humanized raw string, so any word dropped into the deck still works.
@@ -35,9 +36,10 @@ TOPIC_BRIEFS: dict[str, str] = {
     "world_history": "a consequential moment or pattern in world history, told as a short story",
 }
 
-# Roughly the item count that fills two dense pages. Below it, lessons expand to
-# absorb the slack — one extra lesson per this many items short.
-FILL_TARGET_ITEMS = 18
+# The item count that fills the fixed two-page weekday layout (marquee + front
+# row + page-2 wire — derived from the layout contract so it tracks slot tuning).
+# Below it, lessons expand to absorb the slack — one extra per this many short.
+FILL_TARGET_ITEMS = capacity("weekday")
 ITEMS_PER_EXTRA_LESSON = 4
 # Hard ceiling on lessons even on the thinnest day (also bounded by deck size). The
 # Margin box stays well under a column height at this count, so break-inside:avoid

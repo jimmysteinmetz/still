@@ -212,6 +212,11 @@ def build(
     recent = db.recent_selected_titles(conn, since_date)
     recent_titles = [title for title, _ in recent]
     recent_dedupe_keys = {key for _, key in recent if key}
+    # History, not today's output — feeds the "Recently covered Margin lessons"/
+    # avoid-french prompt sections (and the vocab hard backstop) so the Margin
+    # band and Lexicon stop repeating across editions.
+    recent_lessons = db.recent_lessons(conn, since_date)
+    recent_french = db.recent_french_words(conn, since_date)
 
     pool = _candidate_pool(cfg, conn, hours, recent_dedupe_keys)
     if not pool:
@@ -222,7 +227,15 @@ def build(
     # topic selection; it's a non-mutating SELECT MAX(...)+1, safe to read early.
     edition_number = db.next_edition_number(conn)
     console.print(f"[dim]Editorial pass ({edition_kind}, {len(pool)} candidates)…[/dim]")
-    result = editorial.select_and_summarize(pool, cfg, edition_kind, edition_number, recent_titles)
+    result = editorial.select_and_summarize(
+        pool,
+        cfg,
+        edition_kind,
+        edition_number,
+        recent_titles,
+        recent_lessons=recent_lessons,
+        recent_french=recent_french,
+    )
     if not result.selections:
         console.print("[red]Editorial pass selected nothing — aborting.[/red]")
         raise typer.Exit(1)
@@ -263,6 +276,12 @@ def build(
         selected_items = [items_by_id[item_id] for item_id in edition.item_ids]
         db.mark_seen(conn, selected_items)
         db.save_edition(conn, edition, edition.item_ids)
+        db.save_lessons_and_vocab(
+            conn,
+            edition.id,
+            [(lesson.topic, lesson.title, lesson.body) for lesson in result.lessons],
+            [(w.word, w.gloss) for w in result.french_vocab],
+        )
     conn.close()
 
     console.print(
@@ -355,16 +374,6 @@ def _candidate_pool(
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     since = datetime.now(UTC) - timedelta(hours=hours)
     items: list[Item] = []
-    # Built once (not per-source) — same rationale as the shared httpx.Client below.
-    # Only bother if a reddit source is actually configured, so a bare/no-reddit
-    # config never logs a spurious "missing credentials" warning.
-    reddit_client = None
-    if any(isinstance(s, RedditSource) for s in cfg.sources):
-        reddit_client = reddit.build_client(
-            os.environ.get("REDDIT_CLIENT_ID"),
-            os.environ.get("REDDIT_CLIENT_SECRET"),
-            os.environ.get("REDDIT_USER_AGENT", reddit.DEFAULT_USER_AGENT),
-        )
     with httpx.Client(
         timeout=20, follow_redirects=True, headers={"User-Agent": USER_AGENT}
     ) as client:
@@ -376,7 +385,7 @@ def _candidate_pool(
             elif isinstance(source, HnAlgoliaSource):
                 fetched = hn.fetch(source, client, since)
             elif isinstance(source, RedditSource):
-                fetched = reddit.fetch(source, reddit_client)
+                fetched = reddit.fetch(source, client)
             else:
                 console.print(
                     f"[dim]{source.name}: skipped ({source.method} not implemented)[/dim]"

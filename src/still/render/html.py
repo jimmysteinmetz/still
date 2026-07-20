@@ -15,6 +15,7 @@ from still.almanac.weather import Weather
 from still.config import StillConfig
 from still.models import Item
 from still.pipeline.editorial import EditorialResult
+from still.pipeline.layout import EditionKind, split_wire
 from still.render.icons import weather_icon
 from still.render.quotes import epigraph_for
 
@@ -26,15 +27,15 @@ def render_html(
     *,
     date_display: str,
     edition_number: int,
-    kind: str = "weekday",
+    kind: EditionKind = "weekday",
     weather: Weather | None = None,
     sports: list[ScoreRow] | None = None,
     shows: list[ShowRow] | None = None,
     your_day: YourDay | None = None,
 ) -> str:
-    # Reading order is the marquee feature → The Wire (everything else, grouped by
-    # section) → The Margin/Lexicon at the foot. Footnotes are numbered in that
-    # order — marquee first, then section by section — so Sources matches the read.
+    # Reading order follows the fixed two-page layout: marquee feature → the
+    # page-1 Wire front row → the page-2 Wire (grouped by section) → Margin/
+    # Lexicon. Footnotes are numbered in that order so Sources matches the read.
     section_titles = {s.id: s.title for s in cfg.sections}
     footnotes: list[str] = []
 
@@ -54,36 +55,36 @@ def render_html(
             row["section_tag"] = section_tag
         return row
 
-    # Marquee anchors the feature well: the first "pressing" story, or — if a
-    # malfunctioning model flagged none — simply the first selection, so the front
-    # always has a lead rather than an empty well.
+    # The marquee/front/rest split is the fixed layout's — the SAME split
+    # enforce_budget truncated against, so every story lands in the box its
+    # word cap was sized for (pipeline/layout.split_wire).
+    marquee_sel, front_sels, rest_sels = split_wire(result.selections, kind)
     marquee: dict[str, Any] | None = None
-    marquee_id: str | None = None
-    lead_sel = next((s for s in result.selections if s.prominence == "pressing"), None)
-    if lead_sel is None and result.selections:
-        lead_sel = result.selections[0]
-    if lead_sel is not None:
-        marquee_id = lead_sel.item_id
-        tag = section_titles.get(lead_sel.section, lead_sel.section)
-        marquee = _row(lead_sel, lead=True, section_tag=tag)
+    if marquee_sel is not None:
+        tag = section_titles.get(marquee_sel.section, marquee_sel.section)
+        marquee = _row(marquee_sel, lead=True, section_tag=tag)
 
-    # The Wire: every other selection, grouped by section in config order, with any
-    # remaining "pressing" stories leading their section (stable sort keeps the
+    # Page-1 Wire front row: up to P1_WIRE_SLOTS stories, one per column, each
+    # carrying its own section tag (no grouping — they're singles).
+    wire_p1 = [
+        _row(s, lead=False, section_tag=section_titles.get(s.section, s.section))
+        for s in front_sels
+    ]
+
+    # Page-2 Wire: the rest, grouped by section in config order, with any
+    # leftover "pressing" stories leading their section (stable sort keeps the
     # model's order within each prominence tier).
     sections: list[dict[str, Any]] = []
     for section in cfg.sections:
-        sels = [s for s in result.selections if s.section == section.id and s.item_id != marquee_id]
+        sels = [s for s in rest_sels if s.section == section.id]
         sels.sort(key=lambda s: s.prominence != "pressing")
         rows = [_row(sel, lead=False) for sel in sels]
         if rows:
             # key is "entries", not "items" — Jinja's attr lookup would hit dict.items
             sections.append({"title": section.title, "entries": rows})
 
-    # Total Wire volume across all sections, used by the template to size the
-    # .wire column-count (min(wire_count, 4), same idiom as .margin-cols) — a
-    # thin trailing page's last couple of items collapse to fewer, wider columns
-    # instead of stranding across 4 narrow ones (TASK-5).
-    wire_count = sum(len(s["entries"]) for s in sections)
+    # Total page-2 volume, for the min(count, N) column clamp (TASK-5 idiom).
+    wire_p2_count = sum(len(s["entries"]) for s in sections)
 
     env = Environment(
         loader=PackageLoader("still.render", "templates"),
@@ -98,8 +99,9 @@ def render_html(
         is_weekend=kind == "weekend",
         edition_headline=result.edition_headline,
         marquee=marquee,
+        wire_p1=wire_p1,
         sections=sections,
-        wire_count=wire_count,
+        wire_p2_count=wire_p2_count,
         lessons=result.lessons,
         glossary=result.glossary,
         french_vocab=result.french_vocab,
