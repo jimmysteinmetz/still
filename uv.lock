@@ -352,15 +352,6 @@ wheels = [
 ]
 
 [[package]]
-name = "defusedxml"
-version = "0.7.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -853,33 +844,6 @@ wheels = [
 ]
 
 [[package]]
-name = "praw"
-version = "8.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "defusedxml" },
-    { name = "prawcore" },
-    { name = "update-checker" },
-    { name = "websocket-client" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/46/07/bee3bab8634965354402d28aaabae7932097dfa5d9895afbeebeac24de69/praw-8.0.2.tar.gz", hash = "sha256:29bfe995f7f24017dd8eee36153085ad27de1740f13c7dcdb08df42a24a0dae2", size = 23798066, upload-time = "2026-06-24T00:06:31.429Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/7e/0831abb5ef9db1db8981f2c230c5a71ecc81732a7924ec79b076f5eea693/praw-8.0.2-py3-none-any.whl", hash = "sha256:22a988bef07e2d840ab062ae25f760c5bfc6367b9ecaab69f71e7ff511d75564", size = 199203, upload-time = "2026-06-24T00:06:29.73Z" },
-]
-
-[[package]]
-name = "prawcore"
-version = "4.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/08/06/d6eaaaa5ec11ebc56b176e16233c4dbd7ae5a51a9d82649cad8aa2ba3b43/prawcore-4.0.0.tar.gz", hash = "sha256:c7e4d6e1b71e2b9c88680aee467e3e07d22df4c91bb01488ce2a3ab43d76b076", size = 1208273, upload-time = "2026-06-13T02:00:32.083Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/97/e52a0a62a14b17ce382d68d00a838887deab52eddac8d9e87f4e6274efcd/prawcore-4.0.0-py3-none-any.whl", hash = "sha256:53f91bcd4cb25a26ca58f3ba7c5bf83d9d93a74025aae2c926bc6b0d5fd11df7", size = 19294, upload-time = "2026-06-13T02:00:30.519Z" },
-]
-
-[[package]]
 name = "pyasn1"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1198,7 +1162,6 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "pillow" },
-    { name = "praw" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1223,7 +1186,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "pillow", specifier = ">=12.3.0" },
-    { name = "praw", specifier = ">=8.0.2" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
@@ -1319,15 +1281,6 @@ wheels = [
 ]
 
 [[package]]
-name = "update-checker"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/92/0d/cdf2a0bc53f2b0b85a9cc7a81d0c5fa666dc140d26a1797ddf8ce4a24d0d/update_checker-1.0.0.tar.gz", hash = "sha256:bfcac66414572a82a98ea8c8633bf1ce5d102750e3b93469b89b30aa845cd1d7", size = 9600, upload-time = "2026-06-08T07:08:20.799Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/f5/a264987b052d61c172d23eec92935480535fd32e45357bd6557fa2c687d5/update_checker-1.0.0-py3-none-any.whl", hash = "sha256:5837640948ff21820ba3ea881fb4bed5abefb39037895c6447f5e712236d60c6", size = 10618, upload-time = "2026-06-08T07:08:19.782Z" },
-]
-
-[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1362,15 +1315,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0b/02/ae6ceac1baeda530866a85075641cec12989bd8d31af6d5ab4a3e8c92f47/webencodings-0.5.1.tar.gz", hash = "sha256:b36a1c245f2d304965eb4e0a82848379241dc04b865afcc4aab16748587e1923", size = 9721, upload-time = "2017-04-05T20:21:34.189Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/24/2a3e3df732393fed8b3ebf2ec078f05546de641fe1b667ee316ec1dcf3b7/webencodings-0.5.1-py2.py3-none-any.whl", hash = "sha256:a0af1213f3c2226497a97e2b3aa01a7e4bee4f403f95be16fc9acd2947514a78", size = 11774, upload-time = "2017-04-05T20:21:32.581Z" },
-]
-
-[[package]]
-name = "websocket-client"
-version = "1.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]

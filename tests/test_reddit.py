@@ -1,117 +1,99 @@
-"""Reddit adapter against a fake praw client — no live network in tests."""
+"""Reddit adapter against a mocked public RSS feed — no network in tests."""
 
-from dataclasses import dataclass
-from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
-import praw
-import prawcore
-import pytest
+import httpx
 
 from still.config import RedditSource
 from still.ingest import reddit
 
 
-def make_source(**overrides: Any) -> RedditSource:
-    payload: dict[str, Any] = {
+def make_source(**overrides: object) -> RedditSource:
+    payload: dict[str, object] = {
         "name": "r/LocalLLaMA",
         "section": "ai",
         "method": "reddit",
         "class": "trusted",
         "subreddit": "LocalLLaMA",
-        "min_upvotes": 100,
         "max_items": 2,
     }
     payload.update(overrides)
     return RedditSource.model_validate(payload)
 
 
-@dataclass
-class FakeRedditor:
-    name: str
-
-    def __str__(self) -> str:
-        return self.name
+def client_returning(response: httpx.Response) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(lambda request: response))
 
 
-@dataclass
-class FakeSubmission:
-    title: str
-    score: int
-    url: str
-    permalink: str
-    created_utc: float
-    author: FakeRedditor | None = None
-    is_self: bool = False
-    selftext: str = ""
+def entry(
+    *,
+    title: str,
+    permalink: str,
+    link_href: str,
+    comments_href: str,
+    selftext: str | None = None,
+    author: str = "some_user",
+    published: str = "2026-07-19T08:52:53+00:00",
+) -> str:
+    body = (
+        f'<!-- SC_OFF --><div class="md"><p>{selftext}</p></div><!-- SC_ON -->' if selftext else ""
+    )
+    raw_html = (
+        f'<table> <tr><td> <a href="{permalink}">'
+        f"<img /> </a> </td><td> {body} "
+        f'submitted by <a href="https://www.reddit.com/user/{author}"> '
+        f"/u/{author} </a> <br/> "
+        f'<span><a href="{link_href}">[link]</a></span> '
+        f'<span><a href="{comments_href}">[comments]</a></span> '
+        "</td></tr></table>"
+    )
+    content = xml_escape(raw_html)
+    return f"""  <entry>
+    <author><name>/u/{author}</name></author>
+    <content type="html">{content}</content>
+    <id>t3_{permalink.rstrip("/").rsplit("/", 1)[-1]}</id>
+    <link href="{permalink}" />
+    <updated>{published}</updated>
+    <published>{published}</published>
+    <title>{title}</title>
+  </entry>"""
 
 
-class FakeSubreddit:
-    def __init__(self, posts: list[FakeSubmission]) -> None:
-        self._posts = posts
-        self.requested_limit: int | None = None
-        self.requested_time_filter: str | None = None
-
-    def top(self, *, time_filter: str = "all", limit: int | None = None) -> list[FakeSubmission]:
-        self.requested_time_filter = time_filter
-        self.requested_limit = limit
-        return self._posts
+def feed(*entries: str) -> str:
+    body = "\n".join(entries)
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<title>top scoring links : LocalLLaMA</title>
+{body}
+</feed>
+"""
 
 
-class FakeReddit:
-    def __init__(self, subreddit: FakeSubreddit) -> None:
-        self._subreddit = subreddit
+LINK_ENTRY = entry(
+    title="A great local model release",
+    permalink="https://www.reddit.com/r/LocalLLaMA/comments/abc/a_great_local_model_release/",
+    link_href="https://huggingface.co/example/model?utm_source=reddit",
+    comments_href="https://www.reddit.com/r/LocalLLaMA/comments/abc/a_great_local_model_release/",
+    author="some_user",
+)
 
-    def subreddit(self, name: str) -> FakeSubreddit:
-        return self._subreddit
-
-
-class ExplodingSubreddit:
-    def top(self, *, time_filter: str = "all", limit: int | None = None) -> list[Any]:
-        raise prawcore.exceptions.ResponseException(type("R", (), {"status_code": 503})())
-
-
-class ExplodingReddit:
-    def subreddit(self, name: str) -> ExplodingSubreddit:
-        return ExplodingSubreddit()
-
-
-POSTS = [
-    FakeSubmission(
-        title="A great local model release",
-        score=250,
-        url="https://huggingface.co/example/model?utm_source=reddit",
-        permalink="/r/LocalLLaMA/comments/abc/a_great_local_model_release/",
-        created_utc=1_750_000_000.0,
-        author=FakeRedditor("some_user"),
-    ),
-    FakeSubmission(
-        title="Discussion: best quant for 8B models",
-        score=150,
-        url="https://www.reddit.com/r/LocalLLaMA/comments/def/discussion/",
-        permalink="/r/LocalLLaMA/comments/def/discussion_best_quant_for_8b_models/",
-        created_utc=1_750_001_000.0,
-        author=FakeRedditor("another_user"),
-        is_self=True,
-        selftext="Body text of the self post.",
-    ),
-    FakeSubmission(
-        title="A low-effort meme",
-        score=10,  # below min_upvotes
-        url="https://i.redd.it/meme.png",
-        permalink="/r/LocalLLaMA/comments/ghi/meme/",
-        created_utc=1_750_002_000.0,
-        author=None,
-    ),
-]
+SELF_ENTRY = entry(
+    title="Discussion: best quant for 8B models &amp; friends",
+    permalink="https://www.reddit.com/r/LocalLLaMA/comments/def/discussion/",
+    link_href="https://www.reddit.com/r/LocalLLaMA/comments/def/discussion/",
+    comments_href="https://www.reddit.com/r/LocalLLaMA/comments/def/discussion/",
+    selftext="Body text &amp; more of the self post.",
+    author="another_user",
+)
 
 
-def test_fetch_normalizes_posts_and_filters_by_upvotes() -> None:
+def test_fetch_normalizes_link_and_self_posts() -> None:
     source = make_source(max_items=5)
-    fake = FakeReddit(FakeSubreddit(POSTS))
+    items = reddit.fetch(
+        source, client_returning(httpx.Response(200, text=feed(LINK_ENTRY, SELF_ENTRY)))
+    )
 
-    items = reddit.fetch(source, fake)  # type: ignore[arg-type]
-
-    assert len(items) == 2  # the 10-upvote meme is filtered out
+    assert len(items) == 2
     link, self_post = items
     assert link.title == "A great local model release"
     assert link.canonical_url == "https://huggingface.co/example/model"  # tracking param stripped
@@ -121,54 +103,41 @@ def test_fetch_normalizes_posts_and_filters_by_upvotes() -> None:
     assert link.source_name == "r/LocalLLaMA"
     assert link.raw_body is None  # not a self post
 
-    assert self_post.title == "Discussion: best quant for 8B models"
-    assert (
-        self_post.canonical_url
-        == "https://www.reddit.com/r/LocalLLaMA/comments/def/discussion_best_quant_for_8b_models"
-    )
-    assert self_post.raw_body == "Body text of the self post."
+    assert self_post.title == "Discussion: best quant for 8B models & friends"
+    assert self_post.canonical_url == "https://www.reddit.com/r/LocalLLaMA/comments/def/discussion"
+    assert self_post.raw_body == "Body text & more of the self post."
 
 
 def test_fetch_respects_max_items_cap() -> None:
     source = make_source(max_items=1)
-    fake = FakeReddit(FakeSubreddit(POSTS))
-
-    items = reddit.fetch(source, fake)  # type: ignore[arg-type]
+    items = reddit.fetch(
+        source, client_returning(httpx.Response(200, text=feed(LINK_ENTRY, SELF_ENTRY)))
+    )
 
     assert len(items) == 1
     assert items[0].title == "A great local model release"
 
 
-def test_build_client_returns_none_without_credentials() -> None:
-    assert reddit.build_client(None, "secret") is None
-    assert reddit.build_client("id", None) is None
-    assert reddit.build_client(None, None) is None
+def test_fetch_requests_top_of_day_with_limit() -> None:
+    source = make_source(max_items=3)
+
+    def check_params(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["t"] == "day"
+        assert request.url.params["limit"] == "3"
+        assert request.url.path == "/r/LocalLLaMA/top/.rss"
+        return httpx.Response(200, text=feed(LINK_ENTRY))
+
+    client = httpx.Client(transport=httpx.MockTransport(check_params))
+    reddit.fetch(source, client)
 
 
-def test_fetch_returns_empty_when_client_is_none() -> None:
-    """Missing creds → build_client(...) is None → source skipped, never raises."""
+def test_fetch_returns_empty_on_http_error() -> None:
     source = make_source()
-    assert reddit.fetch(source, None) == []
-
-
-def test_fetch_returns_empty_on_api_exception() -> None:
-    source = make_source()
-
-    items = reddit.fetch(source, ExplodingReddit())  # type: ignore[arg-type]
-
+    items = reddit.fetch(source, client_returning(httpx.Response(404)))
     assert items == []
 
 
-def test_build_client_constructs_read_only_client_with_credentials() -> None:
-    client = reddit.build_client("test-id", "test-secret", user_agent="still-tests/0.1")
-    assert isinstance(client, praw.Reddit)
-
-
-def test_build_client_handles_construction_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(*args: Any, **kwargs: Any) -> None:
-        raise prawcore.exceptions.OAuthException(
-            type("R", (), {"status_code": 401})(), error="invalid_grant"
-        )
-
-    monkeypatch.setattr(praw, "Reddit", boom)
-    assert reddit.build_client("bad-id", "bad-secret") is None
+def test_fetch_returns_empty_on_unparseable_feed() -> None:
+    source = make_source()
+    items = reddit.fetch(source, client_returning(httpx.Response(200, text="not xml at all")))
+    assert items == []

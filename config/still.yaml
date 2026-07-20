@@ -21,10 +21,14 @@
 
 edition:
   timezone: America/New_York
+  # The layout is FIXED two-page geometry (src/still/pipeline/layout.py): a
+  # marquee + 4 front-row stories on page 1, the rest on page 2. These caps must
+  # not exceed that layout's capacity (weekday 18 / weekend 10) — code clamps to
+  # it regardless; lower them freely for a lighter paper.
   weekday:
-    max_items: 24       # TODO(two-page): tuned generously for two pages; revisit after a live run
+    max_items: 18       # = layout capacity: 1 marquee + 4 front + 13 page-2
   weekend:
-    max_items: 10       # TODO(two-page): one long-read + supporting hits over two pages; revisit
+    max_items: 10       # = layout capacity: 1 long-read + 4 front + 5 page-2
     long_read: true
     day: saturday        # sat vs sun still open per spec §12 — flip freely
   dedup_lookback_days: 7  # "recently covered" window fed to the editorial prompt (TASK-3)
@@ -84,7 +88,8 @@ sections:
 
 # Add/remove entries freely. `section` must match a sections[].id above.
 # Method-specific fields: rss → url; hn_algolia → min_points;
-# reddit → subreddit + min_upvotes; email/scrape are stubs for v1.1.
+# reddit → subreddit (public top/.rss feed, no upvote floor); email/scrape are
+# stubs for v1.1.
 sources:
   # --- AI / LLMs (spec §5.2) ---
   - name: Simon Willison
@@ -125,7 +130,6 @@ sources:
     method: reddit
     subreddit: LocalLLaMA
     class: firehose
-    min_upvotes: 200
     max_items: 2
 
   - name: Ahead of AI (Sebastian Raschka)
@@ -176,7 +180,6 @@ sources:
     method: reddit
     subreddit: ExperiencedDevs
     class: firehose
-    min_upvotes: 300
     max_items: 1
 
   # --- Cloud / GCP ---
@@ -202,6 +205,12 @@ sources:
     max_items: 2
 
   # --- Sports (team blogs — news/analysis to complement the Scoreboard scores) ---
+  - name: Inside the Hall (Indiana)
+    section: sports
+    method: rss
+    url: https://www.insidethehall.com/feed/
+    class: firehose
+    max_items: 2
   - name: Cartilage Free Captain (Spurs)
     section: sports
     method: rss
@@ -271,7 +280,6 @@ sources:
     method: reddit
     subreddit: guitar
     class: firehose
-    min_upvotes: 500
     max_items: 1
 
   # --- New York (places to visit, city culture, food, history) ---

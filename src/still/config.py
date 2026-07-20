@@ -78,9 +78,10 @@ class HnAlgoliaSource(SourceBase):
 
 
 class RedditSource(SourceBase):
+    """Public `/top/.rss?t=day` feed — no OAuth app, no upvote score to filter on."""
+
     method: Literal["reddit"]
     subreddit: str
-    min_upvotes: int = Field(gt=0)
 
 
 class EmailSource(SourceBase):

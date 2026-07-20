@@ -1,18 +1,29 @@
 """Reddit adapter — top-of-day per curated subreddit (spec §5.3 Reddit recipe).
 
-One `top(time_filter="day")` call per subreddit via praw (OAuth "script" app,
-read-only), upvote threshold from config. Credentials come from env vars
-(REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET/REDDIT_USER_AGENT, same
-gitignored-`.env`-or-Secret-Manager pattern as SEATGEEK_CLIENT_ID) — missing
-creds just hide reddit sources, never break the build. Dedupe vs HN matters —
-that's the pipeline.dedupe stage's job, not this adapter's.
+Fetches each subreddit's public `/top/.rss?t=day` Atom feed over plain https —
+no OAuth app, no credentials. (Reddit closed self-service API app registration
+in late 2025 under its Responsible Builder Policy; new OAuth apps now require
+a manual approval ticket, so the old praw/OAuth path is gone. The RSS feed
+needs no approval and already returns top-of-day ordering, which is the same
+thing the old `top(time_filter="day")` call did.)
+
+The feed has no upvote score, so there's no `min_upvotes` floor to apply
+client-side any more — `top/.rss` is already sorted best-first, and
+`max_items` caps how deep into that ordering a source reaches. A dead/private
+subreddit just 404s and skips gracefully (spec §12), same as every other
+source. Dedupe vs HN matters — that's the pipeline.dedupe stage's job, not
+this adapter's.
 """
 
+import calendar
+import html
 import logging
+import re
 from datetime import UTC, datetime
+from typing import Any
 
-import praw
-import prawcore
+import feedparser
+import httpx
 
 from still.config import RedditSource
 from still.models import Item
@@ -20,73 +31,76 @@ from still.pipeline.normalize import canonicalize_url, make_item_id, title_key
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_USER_AGENT = "still:personal-newspaper:v0.1 (by /u/still-bot)"
+# Reddit's RSS template wraps the external link and the comments permalink in
+# fixed `[link]` / `[comments]` anchor spans — stable since old.reddit.com's
+# RSS predates the API and plenty of tooling still relies on this exact shape.
+_LINK_RE = re.compile(r'<a href="([^"]+)">\[link\]</a>')
+_COMMENTS_RE = re.compile(r'<a href="([^"]+)">\[comments\]</a>')
+_SELFTEXT_RE = re.compile(r"<!-- SC_OFF --><div class=\"md\">(.*)</div><!-- SC_ON -->", re.DOTALL)
 
 
-def build_client(
-    client_id: str | None,
-    client_secret: str | None,
-    user_agent: str = DEFAULT_USER_AGENT,
-) -> praw.Reddit | None:
-    """Build a read-only praw client, or None if credentials are missing.
-
-    Read-only (script-app client_id/secret, no username/password) needs no
-    interactive auth — the app just needs to exist at reddit.com/prefs/apps.
-    """
-    if not client_id or not client_secret:
-        logger.warning(
-            "reddit: missing REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET — reddit sources skipped"
-        )
-        return None
+def fetch(source: RedditSource, client: httpx.Client) -> list[Item]:
+    """Top-of-day posts from one subreddit's public RSS feed."""
+    url = f"https://www.reddit.com/r/{source.subreddit}/top/.rss"
     try:
-        return praw.Reddit(
-            client_id=client_id,
-            client_secret=client_secret,
-            user_agent=user_agent,
-            check_for_updates=False,
-        )
-    except (praw.exceptions.PRAWException, prawcore.exceptions.PrawcoreException) as e:
-        logger.warning("reddit: failed to build client: %s", e)
-        return None
-
-
-def fetch(source: RedditSource, reddit: praw.Reddit | None) -> list[Item]:
-    """Top-of-day posts from one subreddit above the configured upvote floor."""
-    if reddit is None:
-        return []
-    items: list[Item] = []
-    try:
-        # Over-fetch a bit since min_upvotes filters client-side (top() isn't
-        # pre-filterable by score) — capped well below the source's max_items
-        # blowing up into a huge listing pull.
-        submissions = reddit.subreddit(source.subreddit).top(
-            time_filter="day", limit=source.max_items * 5
-        )
-        for post in submissions:
-            if post.score < source.min_upvotes:
-                continue
-            title = str(post.title).strip()
-            if post.is_self:
-                url = canonicalize_url(f"https://www.reddit.com{post.permalink}")
-            else:
-                url = canonicalize_url(str(post.url))
-            items.append(
-                Item(
-                    id=make_item_id(url),
-                    source_name=source.name,
-                    title=title,
-                    canonical_url=url,
-                    author=str(post.author) if post.author else None,
-                    published_at=datetime.fromtimestamp(post.created_utc, tz=UTC),
-                    raw_body=str(post.selftext) if post.is_self and post.selftext else None,
-                    class_=source.class_,
-                    section=source.section,
-                    dedupe_key=title_key(title),
-                )
-            )
-            if len(items) >= source.max_items:
-                break
-    except (praw.exceptions.PRAWException, prawcore.exceptions.PrawcoreException) as e:
+        resp = client.get(url, params={"t": "day", "limit": source.max_items})
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
         logger.warning("skipping %s: %s", source.name, e)
         return []
+
+    feed = feedparser.parse(resp.content)
+    if feed.bozo and not feed.entries:
+        logger.warning("skipping %s: unparseable feed (%s)", source.name, feed.bozo_exception)
+        return []
+
+    items = []
+    for entry in feed.entries[: source.max_items]:
+        title = entry.get("title", "(untitled)").strip()
+        permalink = entry.get("link")
+        published = _entry_datetime(entry)
+        if not permalink or not published:
+            continue
+
+        content = entry.get("content", [{}])[0].get("value", "")
+        link_match = _LINK_RE.search(content)
+        comments_match = _COMMENTS_RE.search(content)
+        external_url = link_match.group(1) if link_match else None
+        comments_url = comments_match.group(1) if comments_match else permalink
+
+        is_self = external_url is None or external_url == comments_url
+        url_ = canonicalize_url(permalink if is_self else external_url)  # type: ignore[arg-type]
+
+        raw_body = None
+        if is_self:
+            selftext_match = _SELFTEXT_RE.search(content)
+            if selftext_match:
+                raw_body = _strip_tags(selftext_match.group(1)).strip() or None
+
+        author = entry.get("author")
+        items.append(
+            Item(
+                id=make_item_id(url_),
+                source_name=source.name,
+                title=title,
+                canonical_url=url_,
+                author=author.removeprefix("/u/") if author else None,
+                published_at=published,
+                raw_body=raw_body,
+                class_=source.class_,
+                section=source.section,
+                dedupe_key=title_key(title),
+            )
+        )
     return items
+
+
+def _entry_datetime(entry: Any) -> datetime | None:
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not parsed:
+        return None
+    return datetime.fromtimestamp(calendar.timegm(parsed), tz=UTC)
+
+
+def _strip_tags(markup: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", " ", markup))

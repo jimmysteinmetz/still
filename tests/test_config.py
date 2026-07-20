@@ -18,7 +18,7 @@ def load_raw() -> dict:
 
 def test_shipped_config_is_valid() -> None:
     cfg = load_config(REPO_ROOT / DEFAULT_CONFIG_PATH)
-    assert cfg.edition.weekday.max_items == 24  # two-page edition
+    assert cfg.edition.weekday.max_items == 18  # fixed two-page layout capacity
     assert cfg.edition.dedup_lookback_days == 7
     assert {s.id for s in cfg.sections} == {
         "ai",
